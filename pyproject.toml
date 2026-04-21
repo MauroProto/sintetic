@@ -1,0 +1,54 @@
+[project]
+name = "synthetic-ds"
+version = "0.1.0"
+description = "Local synthetic dataset generation pipeline for PDFs with multiple OpenAI-compatible providers"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "keyring>=25.6.0",
+  "openai>=1.99.0",
+  "pydantic>=2.9.0",
+  "python-multipart>=0.0.9",
+  "pymupdf>=1.24.10",
+  "pyyaml>=6.0.2",
+  "tenacity>=9.0.0",
+  "typer>=0.12.5",
+  "uvicorn>=0.30.6",
+  "tiktoken>=0.12.0",
+  "langdetect>=1.0.9",
+  "pillow>=12.2.0",
+]
+
+[project.optional-dependencies]
+semantic = [
+  "sentence-transformers>=3.0.1",
+  "scikit-learn>=1.5.1",
+]
+parse = [
+  "docling>=2.45.0",
+]
+dev = [
+  "pytest>=8.3.2",
+]
+
+[project.scripts]
+synthetic-ds = "synthetic_ds.cli:app"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+synthetic_ds = ["web/dist/index.html", "web/dist/**/*", "web/dist/**/**/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

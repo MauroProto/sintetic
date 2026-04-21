@@ -1,0 +1,200 @@
+@import "@fontsource-variable/geist/index.css";
+@import "@fontsource-variable/geist-mono/index.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Vercel palette */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%; /* #171717 */
+
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 98%; /* #fafafa */
+    --secondary-foreground: 0 0% 9%;
+
+    --muted: 0 0% 98%;
+    --muted-foreground: 0 0% 30%; /* #4d4d4d */
+
+    --accent: 0 0% 92%; /* #ebebeb */
+    --accent-foreground: 0 0% 9%;
+
+    --destructive: 0 100% 65%; /* Ship Red #ff5b4f */
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 9%;
+
+    --border: 0 0% 92%; /* #ebebeb */
+    --input: 0 0% 92%;
+    --ring: 212 100% 48%; /* Focus blue */
+
+    --radius: 0.5rem;
+
+    /* Workflow colors */
+    --workflow-develop: 211 92% 49%; /* #0a72ef */
+    --workflow-preview: 321 78% 49%; /* #de1d8d */
+    --workflow-ship: 4 100% 65%;     /* #ff5b4f */
+
+    /* Shadow tokens — shadow-as-border + multi-layer depth */
+    --shadow-border: 0 0 0 1px rgba(0, 0, 0, 0.08);
+    --shadow-border-light: 0 0 0 1px rgb(235, 235, 235);
+    --shadow-elevation-low: 0 2px 2px rgba(0, 0, 0, 0.04);
+    --shadow-elevation-high: 0 8px 8px -8px rgba(0, 0, 0, 0.04);
+    --shadow-inner-glow: 0 0 0 1px #fafafa;
+
+    --link: 214 100% 48%; /* #0072f5 */
+    --badge-blue-bg: 213 100% 96%; /* #ebf5ff */
+    --badge-blue-fg: 211 100% 42%; /* #0068d6 */
+  }
+
+  .dark {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 96%;
+
+    --card: 0 0% 6%;
+    --card-foreground: 0 0% 96%;
+
+    --popover: 0 0% 8%;
+    --popover-foreground: 0 0% 96%;
+
+    --primary: 0 0% 96%;
+    --primary-foreground: 0 0% 4%;
+
+    --secondary: 0 0% 10%;
+    --secondary-foreground: 0 0% 96%;
+
+    --muted: 0 0% 10%;
+    --muted-foreground: 0 0% 60%;
+
+    --accent: 0 0% 14%;
+    --accent-foreground: 0 0% 96%;
+
+    --destructive: 4 100% 65%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 55%;
+    --warning: 38 92% 60%;
+
+    --border: 0 0% 14%;
+    --input: 0 0% 14%;
+    --ring: 212 100% 60%;
+
+    --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.08);
+    --shadow-border-light: 0 0 0 1px rgba(255, 255, 255, 0.1);
+    --shadow-elevation-low: 0 2px 2px rgba(0, 0, 0, 0.24);
+    --shadow-elevation-high: 0 8px 8px -8px rgba(0, 0, 0, 0.24);
+    --shadow-inner-glow: 0 0 0 1px rgba(255, 255, 255, 0.04);
+
+    --link: 212 100% 66%;
+    --badge-blue-bg: 213 60% 18%;
+    --badge-blue-fg: 213 100% 75%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: "liga", "calt";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1 {
+    font-weight: 600;
+    letter-spacing: -0.05em; /* -2.4px at 48px */
+    line-height: 1;
+  }
+  h2 {
+    font-weight: 600;
+    letter-spacing: -0.04em; /* -1.28px at 32px */
+    line-height: 1.25;
+  }
+  h3 {
+    font-weight: 600;
+    letter-spacing: -0.04em; /* -0.96px at 24px */
+    line-height: 1.33;
+  }
+
+  ::selection {
+    background: hsl(var(--foreground) / 0.1);
+    color: hsl(var(--foreground));
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.25);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.45);
+  }
+}
+
+@layer utilities {
+  .font-geist {
+    font-family: "Geist Variable", Arial, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  }
+  .font-geist-mono {
+    font-family: "Geist Mono Variable", ui-monospace, SFMono-Regular, "Roboto Mono", Menlo, Monaco, "Liberation Mono", "DejaVu Sans Mono", "Courier New", monospace;
+  }
+
+  .tracking-display {
+    letter-spacing: -0.05em;
+  }
+  .tracking-h2 {
+    letter-spacing: -0.04em;
+  }
+  .tracking-h3 {
+    letter-spacing: -0.04em;
+  }
+
+  /* Shadow-as-border utilities */
+  .shadow-border {
+    box-shadow: var(--shadow-border);
+  }
+  .shadow-border-light {
+    box-shadow: var(--shadow-border-light);
+  }
+  .shadow-card {
+    box-shadow: var(--shadow-border), var(--shadow-elevation-low), var(--shadow-elevation-high), var(--shadow-inner-glow);
+  }
+  .shadow-card-hover {
+    box-shadow: var(--shadow-border),
+      0 4px 4px rgba(0, 0, 0, 0.04),
+      0 12px 12px -8px rgba(0, 0, 0, 0.04),
+      var(--shadow-inner-glow);
+  }
+
+  .text-link {
+    color: hsl(var(--link));
+  }
+}

@@ -1,0 +1,91 @@
+providers:
+  active: fireworks
+  profiles:
+    fireworks:
+      api_key_env: FIREWORKS_API_KEY
+      base_url: https://api.fireworks.ai/inference/v1
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      max_tokens: 2048
+      temperature: 0.2
+      concurrency: 4
+      extra_headers: {}
+    openai:
+      api_key_env: OPENAI_API_KEY
+      base_url: https://api.openai.com/v1
+      model: gpt-4.1-mini
+      max_tokens: 2048
+      temperature: 0.2
+      concurrency: 4
+      extra_headers: {}
+    zai:
+      api_key_env: ZAI_API_KEY
+      base_url: https://api.z.ai/api/paas/v4
+      model: GLM-4.7
+      max_tokens: 2048
+      temperature: 0.2
+      concurrency: 4
+      extra_headers: {}
+    groq:
+      api_key_env: GROQ_API_KEY
+      base_url: https://api.groq.com/openai/v1
+      model: moonshotai/kimi-k2-instruct-0905
+      max_tokens: 2048
+      temperature: 0.2
+      concurrency: 4
+      extra_headers: {}
+    openrouter:
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      model: moonshotai/kimi-k2
+      max_tokens: 2048
+      temperature: 0.2
+      concurrency: 4
+      extra_headers: {}
+    xai:
+      api_key_env: XAI_API_KEY
+      base_url: https://api.x.ai/v1
+      model: grok-3-mini
+      max_tokens: 2048
+      temperature: 0.2
+      concurrency: 4
+      extra_headers: {}
+parsing:
+  primary_parser: docling
+  fallback_parser: pymupdf
+  default_language: es
+  enable_ocr: true
+  ocr_text_min_chars: 80
+  render_page_images: true
+  page_image_dpi: 144
+  multimodal_max_pages_per_chunk: 2
+chunking:
+  strategy: headings_first
+  target_tokens: 512
+  overlap: 50
+generation:
+  resource_profile: low
+  generation_workers: 2
+  judge_workers: 1
+  prompt_version: v1
+  backend: sync_pool
+  retries: 3
+  max_generation_attempts_per_target: 3
+  targets_per_chunk: 3
+  page_batch_size: 100
+  batch_pause_seconds: 2.0
+  mix:
+    extractive: 0.35
+    inferential: 0.25
+    unanswerable: 0.2
+    multi_chunk: 0.15
+    format_specific: 0.05
+  refusal_text: La informacion necesaria para responder esta pregunta no se encuentra
+    en el documento provisto.
+filters:
+  preset: balanced
+  groundedness_threshold: 0.7
+  overall_threshold: 0.7
+review:
+  sample_size: 100
+export:
+  require_eval_split: true
