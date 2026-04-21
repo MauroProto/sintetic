@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from synthetic_ds.models import ChunkRecord, ExampleKind, GeneratedExample, GenerationTarget, JudgeScore
-from synthetic_ds.prompts import build_document_summary_prompt, build_generation_prompt, build_judge_prompt
+from synthetic_ds.prompts import build_generation_prompt, build_judge_prompt
 
 
 GENERATION_SCHEMA: dict[str, Any] = {
@@ -304,35 +304,37 @@ def generate_document_summary(
     backend: StructuredGenerationBackend,
     language: str,
 ) -> str | None:
-    """Genera un resumen del documento completo para contexto."""
+    """Genera un resumen local y barato del documento completo para contexto."""
+    del backend, language
     if not chunks:
         return None
-    
-    try:
-        prompt = build_document_summary_prompt(chunks, language=language)
-        response = backend.generate_structured(
-            system_prompt=prompt.system,
-            user_prompt=prompt.user,
-            json_schema={
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string"},
-                    "main_topics": {"type": "array", "items": {"type": "string"}},
-                    "structure": {"type": "string"},
-                },
-                "required": ["summary"],
-            },
-            session_id="document-summary",
-        )
-        summary = response.get("summary", "")
-        topics = response.get("main_topics", [])
-        if topics:
-            summary += f"\n\nMain topics: {', '.join(topics)}"
-        return summary
-    except Exception:
-        # Si falla, usar un resumen simple
-        headings = [", ".join(chunk.section_path) for chunk in chunks[:5]]
-        return f"Document structure: {'; '.join(headings)}" if headings else None
+
+    headings: list[str] = []
+    for chunk in chunks:
+        label = ", ".join(part for part in chunk.section_path if part).strip()
+        if not label:
+            label = f"Pages {chunk.page_range[0]}-{chunk.page_range[1]}"
+        if label not in headings:
+            headings.append(label)
+        if len(headings) >= 5:
+            break
+
+    preview_words: list[str] = []
+    for chunk in chunks:
+        preview_words.extend(chunk.text.replace("\n", " ").split())
+        if len(preview_words) >= 80:
+            break
+
+    preview = " ".join(preview_words[:80]).strip()
+    lines = [
+        f"Document: {chunks[0].source_doc}",
+        f"Chunk count: {len(chunks)}",
+    ]
+    if headings:
+        lines.append(f"Structure: {'; '.join(headings)}")
+    if preview:
+        lines.append(f"Preview: {preview}")
+    return "\n".join(lines)
 
 
 def generate_example_for_target(

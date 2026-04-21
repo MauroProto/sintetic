@@ -115,6 +115,7 @@ def _build_semantic_tree(page_texts: list[str]) -> list[SemanticSection]:
     current_section: SemanticSection | None = None
     
     for page_num, page_text in enumerate(page_texts, 1):
+        root.page_end = page_num
         lines = page_text.split('\n')
         current_paragraph: list[str] = []
         
@@ -189,6 +190,11 @@ def _build_semantic_tree(page_texts: list[str]) -> list[SemanticSection]:
                 current_chapter.text += (' ' + para_text if current_chapter.text else para_text)
             else:
                 root.text += (' ' + para_text if root.text else para_text)
+
+        if current_chapter:
+            current_chapter.page_end = page_num
+        if current_section:
+            current_section.page_end = page_num
     
     # Actualizar rangos de página
     for chapter in root.children:

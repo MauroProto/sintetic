@@ -61,7 +61,11 @@ export function DatasetDashboardPage() {
 
   function toggleSelection(key: string) {
     const next = new Set(selected);
-    next.has(key) ? next.delete(key) : next.add(key);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
     setSelected(next);
   }
 

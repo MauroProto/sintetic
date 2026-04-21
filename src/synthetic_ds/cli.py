@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+import io
+import json
 from pathlib import Path
+import sys
+import time
 import webbrowser
 
 import typer
@@ -28,10 +33,29 @@ app = typer.Typer(no_args_is_help=True, add_completion=False)
 provider_app = typer.Typer(no_args_is_help=True, add_completion=False)
 app.add_typer(provider_app, name="provider")
 
+TERMINAL_JOB_STATUSES = {"completed", "failed", "cancelled"}
+
 
 @app.callback()
 def main() -> None:
     """synthetic-ds CLI."""
+
+
+def _emit_json(payload: object) -> None:
+    typer.echo(json.dumps(payload, ensure_ascii=True))
+
+
+def _job_payload(job) -> dict:
+    payload = job.model_dump(mode="json")
+    payload["dataset_mode"] = job.config.get("dataset_mode")
+    payload["note"] = job.config.get("dataset_mode_note")
+    return payload
+
+
+def _get_cli_job_runner(project_dir: Path):
+    from synthetic_ds.job_runner import JobRunner
+
+    return JobRunner(project_dir=project_dir, job_store=get_job_store(), secret_store=get_secret_store())
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -233,6 +257,57 @@ def serve_app(
 
 
 @app.command()
+def submit(
+    pdf_dir: Path,
+    project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    generate_eval: str = typer.Option("true", "--generate-eval"),
+    parser_mode: str = typer.Option("auto", "--parser-mode"),
+    resource_profile: str = typer.Option("low", "--resource-profile"),
+    generation_workers: int = typer.Option(2, "--generation-workers"),
+    judge_workers: int = typer.Option(1, "--judge-workers"),
+    page_batch_size: int = typer.Option(100, "--page-batch-size"),
+    batch_pause_seconds: float = typer.Option(2.0, "--batch-pause-seconds"),
+    targets_per_chunk: int = typer.Option(3, "--targets-per-chunk"),
+    include_file: list[str] = typer.Option([], "--include-file"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    pdf_path = pdf_dir.resolve()
+    pdf_count = len(discover_pdf_paths(pdf_path, recursive=True))
+    if pdf_count < 1:
+        raise typer.BadParameter("No se encontraron PDFs elegibles en la carpeta indicada.")
+
+    init_project(project_dir)
+    runner = _get_cli_job_runner(project_dir)
+    job_id = runner.start_job(
+        source_dir=str(pdf_path),
+        project_dir=str(project_dir.resolve()),
+        generate_eval=parse_bool(generate_eval),
+        parser_mode=parser_mode,
+        resource_profile=resource_profile,
+        generation_workers=generation_workers,
+        judge_workers=judge_workers,
+        page_batch_size=page_batch_size,
+        batch_pause_seconds=batch_pause_seconds,
+        targets_per_chunk=targets_per_chunk,
+        included_files=include_file or None,
+    )
+    job = get_job_store().get_job(job_id)
+    if job is None:
+        raise typer.Exit(code=1)
+
+    payload = _job_payload(job)
+    if json_output:
+        _emit_json(payload)
+        return
+    typer.echo(
+        f"Submitted job {job.job_id}: status={job.status} stage={job.stage} "
+        f"mode={payload.get('dataset_mode') or '-'} artifacts={job.artifacts_dir}"
+    )
+    if payload.get("note"):
+        typer.echo(str(payload["note"]))
+
+
+@app.command()
 def run(
     pdf_dir: Path,
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
@@ -243,6 +318,7 @@ def run(
     judge_workers: int = typer.Option(1, "--judge-workers"),
     page_batch_size: int = typer.Option(100, "--page-batch-size"),
     batch_pause_seconds: float = typer.Option(2.0, "--batch-pause-seconds"),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     run_dir = build_run_output_dir(pdf_dir)
     paths, config = _paths_and_config(project_dir, run_dir=run_dir)
@@ -253,16 +329,17 @@ def run(
     if pdf_count < 1:
         raise typer.BadParameter("No se encontraron PDFs elegibles en la carpeta indicada.")
     expected_mode = detect_dataset_mode(pdf_count)
-    typer.echo(f"Detected mode: {dataset_mode_label(expected_mode)}")
-    typer.echo(dataset_mode_summary(expected_mode, pdf_count=pdf_count))
-    if expected_mode == "multi_document" and not generate_eval_flag:
-        typer.echo(
-            "Ignoring legacy --generate-eval false: multi-document mode always exports eval limpio por doc_id."
-        )
-    elif expected_mode == "single_document" and generate_eval_flag:
-        typer.echo(
-            "Ignoring legacy --generate-eval true: single-document mode exports train + review without eval limpio."
-        )
+    if not json_output:
+        typer.echo(f"Detected mode: {dataset_mode_label(expected_mode)}")
+        typer.echo(dataset_mode_summary(expected_mode, pdf_count=pdf_count))
+        if expected_mode == "multi_document" and not generate_eval_flag:
+            typer.echo(
+                "Ignoring legacy --generate-eval false: multi-document mode always exports eval limpio por doc_id."
+            )
+        elif expected_mode == "single_document" and generate_eval_flag:
+            typer.echo(
+                "Ignoring legacy --generate-eval true: single-document mode exports train + review without eval limpio."
+            )
     effective_generate_eval = expected_mode == "multi_document"
     config.generation.resource_profile = resource_profile
     config.generation.generation_workers = generation_workers
@@ -271,42 +348,92 @@ def run(
     config.generation.batch_pause_seconds = batch_pause_seconds
     backend = build_backend(config, store=secret_store)
     session = PipelineSession(paths=paths, config=config, backend=backend)
+    captured_output = io.StringIO()
+    with ExitStack() as stack:
+        if json_output:
+            stack.enter_context(redirect_stdout(captured_output))
+            stack.enter_context(redirect_stderr(captured_output))
 
-    document_count, chunk_count = session.ingest(pdf_dir=pdf_dir, recursive=recursive_flag)
-    manifest = session.split()
-    train_total = session.generate_split("train")
-    train_summary = session.curate_split("train")
+        document_count, chunk_count = session.ingest(pdf_dir=pdf_dir, recursive=recursive_flag)
+        manifest = session.split()
+        train_total = session.generate_split("train")
+        train_summary = session.curate_split("train")
 
-    eval_total = 0
-    eval_summary = CuratedSummary(total_input=0, accepted=0, rejected=0, rejected_by_reason={})
-    if effective_generate_eval and manifest.has_clean_eval:
-        eval_total = session.generate_split("eval")
-        eval_summary = session.curate_split("eval")
-    else:
-        write_jsonl([], paths.generated_dir / "eval.jsonl")
-        write_jsonl([], paths.curated_dir / "eval.jsonl")
-        write_json(eval_summary.model_dump(mode="json"), paths.curated_dir / "eval-summary.json")
+        eval_total = 0
+        eval_summary = CuratedSummary(total_input=0, accepted=0, rejected=0, rejected_by_reason={})
+        if effective_generate_eval and manifest.has_clean_eval:
+            eval_total = session.generate_split("eval")
+            eval_summary = session.curate_split("eval")
+        else:
+            write_jsonl([], paths.generated_dir / "eval.jsonl")
+            write_jsonl([], paths.curated_dir / "eval.jsonl")
+            write_json(eval_summary.model_dump(mode="json"), paths.curated_dir / "eval-summary.json")
 
-    train_count, eval_count, review_count = session.export()
-    report_path, _markdown = session.report()
+        train_count, eval_count, review_count = session.export()
+        report_path, _markdown = session.report()
+    payload = {
+        "mode": manifest.dataset_mode,
+        "documents": document_count,
+        "chunks": chunk_count,
+        "train_generated": train_total,
+        "train_accepted": train_summary.accepted,
+        "eval_generated": eval_total,
+        "eval_accepted": eval_summary.accepted,
+        "exports": {
+            "train": train_count,
+            "eval": eval_count,
+            "review": review_count,
+        },
+        "report": str(report_path),
+        "output_dir": str(paths.run_dir),
+    }
+    if json_output:
+        _emit_json(payload)
+        return
     typer.echo(
         "Pipeline complete: "
-        f"mode={manifest.dataset_mode} "
-        f"documents={document_count} chunks={chunk_count} "
-        f"train_generated={train_total} train_accepted={train_summary.accepted} "
-        f"eval_generated={eval_total} eval_accepted={eval_summary.accepted} "
+        f"mode={payload['mode']} "
+        f"documents={payload['documents']} chunks={payload['chunks']} "
+        f"train_generated={payload['train_generated']} train_accepted={payload['train_accepted']} "
+        f"eval_generated={payload['eval_generated']} eval_accepted={payload['eval_accepted']} "
         f"exports(train={train_count}, eval={eval_count}, review={review_count}) "
         f"report={report_path}"
     )
 
 
 @app.command()
-def status(job_id: str | None = typer.Option(None, "--job-id")) -> None:
+def jobs(
+    limit: int = typer.Option(20, "--limit"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    store = get_job_store()
+    records = store.list_jobs(limit=max(1, limit))
+    payload = {"jobs": [_job_payload(job) for job in records]}
+    if json_output:
+        _emit_json(payload)
+        return
+    for job in records:
+        typer.echo(
+            f"{job.job_id} status={job.status} stage={job.stage} percent={job.percent:.2f} source={job.source_dir}"
+        )
+
+
+@app.command()
+def status(
+    job_id: str | None = typer.Option(None, "--job-id"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
     store = get_job_store()
     job = store.get_job(job_id) if job_id else store.active_job()
     if job is None:
-        typer.echo("No active job found")
+        if json_output:
+            _emit_json({"error": "No active job found"})
+        else:
+            typer.echo("No active job found")
         raise typer.Exit(code=1)
+    if json_output:
+        _emit_json(_job_payload(job))
+        return
     typer.echo(
         f"job={job.job_id} status={job.status} stage={job.stage} percent={job.percent:.2f} "
         f"message={job.message or '-'}"
@@ -314,14 +441,82 @@ def status(job_id: str | None = typer.Option(None, "--job-id")) -> None:
 
 
 @app.command()
+def events(
+    job_id: str = typer.Option(..., "--job-id"),
+    after_event_id: int = typer.Option(0, "--after-event-id"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    store = get_job_store()
+    items = store.list_events(job_id, after_event_id=after_event_id)
+    payload = {
+        "job_id": job_id,
+        "after_event_id": after_event_id,
+        "events": [item.model_dump(mode="json") for item in items],
+    }
+    if json_output:
+        _emit_json(payload)
+        return
+    for item in items:
+        typer.echo(
+            f"{item.event_id} status={item.status} stage={item.stage} percent={item.percent:.2f} "
+            f"message={item.message or '-'}"
+        )
+
+
+@app.command()
+def wait(
+    job_id: str = typer.Option(..., "--job-id"),
+    timeout_seconds: float | None = typer.Option(None, "--timeout-seconds"),
+    poll_interval: float = typer.Option(1.0, "--poll-interval"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    store = get_job_store()
+    started_at = time.time()
+    while True:
+        job = store.get_job(job_id)
+        if job is None:
+            if json_output:
+                _emit_json({"job_id": job_id, "error": "Unknown job"})
+            else:
+                typer.echo(f"Unknown job '{job_id}'")
+            raise typer.Exit(code=1)
+
+        if job.status in TERMINAL_JOB_STATUSES:
+            payload = _job_payload(job)
+            if json_output:
+                _emit_json(payload)
+            else:
+                typer.echo(
+                    f"job={job.job_id} status={job.status} stage={job.stage} percent={job.percent:.2f} "
+                    f"message={job.message or '-'}"
+                )
+            raise typer.Exit(code=0 if job.status == "completed" else 1)
+
+        if timeout_seconds is not None and (time.time() - started_at) >= timeout_seconds:
+            payload = _job_payload(job)
+            payload["timed_out"] = True
+            if json_output:
+                _emit_json(payload)
+            else:
+                typer.echo(
+                    f"Timed out waiting for {job.job_id}: status={job.status} stage={job.stage} percent={job.percent:.2f}"
+                )
+            raise typer.Exit(code=2)
+
+        time.sleep(max(0.1, poll_interval))
+
+
+@app.command()
 def pause(
     job_id: str = typer.Option(..., "--job-id"),
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    from synthetic_ds.job_runner import JobRunner
-
-    runner = JobRunner(project_dir=project_dir, job_store=get_job_store(), secret_store=get_secret_store())
+    runner = _get_cli_job_runner(project_dir)
     runner.control_job(job_id=job_id, action="pause")
+    if json_output:
+        _emit_json({"job_id": job_id, "action": "pause"})
+        return
     typer.echo(f"Pause requested for {job_id}")
 
 
@@ -329,11 +524,13 @@ def pause(
 def resume(
     job_id: str = typer.Option(..., "--job-id"),
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    from synthetic_ds.job_runner import JobRunner
-
-    runner = JobRunner(project_dir=project_dir, job_store=get_job_store(), secret_store=get_secret_store())
+    runner = _get_cli_job_runner(project_dir)
     runner.control_job(job_id=job_id, action="resume")
+    if json_output:
+        _emit_json({"job_id": job_id, "action": "resume"})
+        return
     typer.echo(f"Resume requested for {job_id}")
 
 
@@ -341,11 +538,13 @@ def resume(
 def cancel(
     job_id: str = typer.Option(..., "--job-id"),
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    from synthetic_ds.job_runner import JobRunner
-
-    runner = JobRunner(project_dir=project_dir, job_store=get_job_store(), secret_store=get_secret_store())
+    runner = _get_cli_job_runner(project_dir)
     runner.control_job(job_id=job_id, action="cancel")
+    if json_output:
+        _emit_json({"job_id": job_id, "action": "cancel"})
+        return
     typer.echo(f"Cancel requested for {job_id}")
 
 
@@ -353,6 +552,7 @@ def cancel(
 def verify(
     mode: str = typer.Option("mock-full", "--mode"),
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     if mode == "mock-full":
         summary = run_mock_full_verification()
@@ -360,13 +560,35 @@ def verify(
         summary = run_real_smoke_verification(project_dir=project_dir, secret_store=get_secret_store())
     else:
         raise typer.BadParameter(f"Unknown verify mode '{mode}'")
+    if json_output:
+        _emit_json(summary)
+        return
     typer.echo(f"verify {summary['mode']} ok={summary['ok']}")
 
 
 @provider_app.command("list")
-def provider_list(project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True)) -> None:
+def provider_list(
+    project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
     paths, config = _paths_and_config(project_dir)
     _ = paths
+    payload = {
+        "active": config.providers.active,
+        "providers": [
+            {
+                "name": name,
+                "model": profile.model,
+                "base_url": profile.base_url,
+                "env": profile.api_key_env,
+                "active": name == config.providers.active,
+            }
+            for name, profile in config.providers.profiles.items()
+        ],
+    }
+    if json_output:
+        _emit_json(payload)
+        return
     for name, profile in config.providers.profiles.items():
         marker = "*" if name == config.providers.active else "-"
         typer.echo(f"{marker} {name}: model={profile.model} base_url={profile.base_url} env={profile.api_key_env}")
@@ -376,12 +598,16 @@ def provider_list(project_dir: Path = typer.Option(Path("."), "--project-dir", f
 def provider_use(
     provider_name: str,
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     paths, config = _paths_and_config(project_dir)
     if provider_name not in config.providers.profiles:
         raise typer.BadParameter(f"Unknown provider '{provider_name}'")
     config.providers.active = provider_name
     save_config(config, paths.config_path)
+    if json_output:
+        _emit_json({"active": provider_name})
+        return
     typer.echo(f"Active provider set to {provider_name}")
 
 
@@ -390,13 +616,27 @@ def provider_set_key(
     provider_name: str,
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
     api_key: str | None = typer.Option(None, "--api-key"),
+    stdin_input: bool = typer.Option(False, "--stdin"),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     paths, config = _paths_and_config(project_dir)
     _ = paths
     if provider_name not in config.providers.profiles:
         raise typer.BadParameter(f"Unknown provider '{provider_name}'")
-    secret = api_key or typer.prompt("API key", hide_input=True, confirmation_prompt=True)
+    if api_key and stdin_input:
+        raise typer.BadParameter("Use either --api-key or --stdin, not both.")
+    if stdin_input:
+        secret = sys.stdin.read().strip()
+        if not secret:
+            raise typer.BadParameter("No API key received from stdin.")
+    elif api_key:
+        secret = api_key
+    else:
+        secret = typer.prompt("API key", hide_input=True, confirmation_prompt=True)
     store_api_key(provider_name, secret, store=get_secret_store())
+    if json_output:
+        _emit_json({"stored": True, "provider": provider_name})
+        return
     typer.echo(f"Stored API key securely for provider {provider_name}")
 
 
@@ -404,6 +644,7 @@ def provider_set_key(
 def provider_test(
     provider_name: str | None = typer.Argument(None),
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+    json_output: bool = typer.Option(False, "--json"),
 ) -> None:
     paths, config = _paths_and_config(project_dir)
     _ = paths
@@ -423,4 +664,7 @@ def provider_test(
         },
         session_id=f"provider-test-{selected}",
     )
+    if json_output:
+        _emit_json({"provider": selected, "response": payload})
+        return
     typer.echo(f"Provider {selected} responded with: {payload}")

@@ -123,6 +123,7 @@ class PipelineSession:
             target_tokens=self.config.chunking.target_tokens,
             overlap=self.config.chunking.overlap,
             default_language=self.config.parsing.default_language,
+            chunking_strategy=self.config.chunking.strategy,
             recursive=recursive,
             page_asset_dir=self.paths.artifacts_dir / "pages",
             enable_ocr=self.config.parsing.enable_ocr,

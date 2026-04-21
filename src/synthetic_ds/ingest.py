@@ -297,6 +297,7 @@ def ingest_directory(
     target_tokens: int,
     overlap: int,
     default_language: str,
+    chunking_strategy: str = "semantic",
     recursive: bool = True,
     page_asset_dir: Path | None = None,
     enable_ocr: bool = True,
@@ -320,7 +321,14 @@ def ingest_directory(
             page_image_dpi=page_image_dpi,
         )
         documents.append(document)
-        chunks.extend(chunk_document(document, target_tokens=target_tokens, overlap=overlap))
+        chunks.extend(
+            chunk_document(
+                document,
+                target_tokens=target_tokens,
+                overlap=overlap,
+                strategy=chunking_strategy,
+            )
+        )
     return IngestResult(documents=documents, chunks=attach_neighbors(chunks))
 
 

@@ -120,10 +120,16 @@ export function ConfigEditor() {
         <Section title="Chunking">
           <div className="grid gap-6 md:grid-cols-3">
             <Field label="Estrategia">
-              <Input
+              <Select
                 value={config.chunking.strategy}
-                onChange={(event) => updateSection("chunking", { strategy: event.target.value })}
-              />
+                onValueChange={(value) => updateSection("chunking", { strategy: value })}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="semantic">semantic</SelectItem>
+                  <SelectItem value="headings_first">headings_first</SelectItem>
+                </SelectContent>
+              </Select>
             </Field>
             <Field label="Target tokens">
               <Input

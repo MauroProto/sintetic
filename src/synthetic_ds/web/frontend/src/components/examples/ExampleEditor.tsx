@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Check, CheckCheck, Trash2, X } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/components/ui/toast";
 import { useExampleMutations } from "@/hooks/useDashboardExamples";
-import type { DashboardExampleItem } from "@/lib/types";
+import type { DashboardExampleItem, JudgeScore } from "@/lib/types";
 
 interface Props {
   item: DashboardExampleItem | null;
@@ -31,6 +30,13 @@ const KIND_OPTIONS = [
 ] as const;
 
 const DIFFICULTY_OPTIONS = ["easy", "medium", "hard", "low", "high"] as const;
+const JUDGE_SCORE_FIELDS: Array<keyof Pick<JudgeScore, "relevance" | "groundedness" | "format" | "difficulty" | "overall">> = [
+  "relevance",
+  "groundedness",
+  "format",
+  "difficulty",
+  "overall",
+];
 
 export function ExampleEditor({ item, onClose }: Props) {
   const { toast } = useToast();
@@ -218,10 +224,10 @@ export function ExampleEditor({ item, onClose }: Props) {
                 Judge scores
               </p>
               <div className="mt-2 grid grid-cols-5 gap-3 font-mono text-[12px]">
-                {(["relevance", "groundedness", "format", "difficulty", "overall"] as const).map((k) => (
+                {JUDGE_SCORE_FIELDS.map((k) => (
                   <div key={k} className="flex flex-col">
                     <span className="text-[10px] text-muted-foreground">{k}</span>
-                    <span>{(item.judge_score as any)[k]?.toFixed?.(2) ?? "-"}</span>
+                    <span>{item.judge_score[k]?.toFixed(2) ?? "-"}</span>
                   </div>
                 ))}
               </div>

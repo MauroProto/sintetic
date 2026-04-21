@@ -59,9 +59,9 @@ parsing:
   page_image_dpi: 144
   multimodal_max_pages_per_chunk: 2
 chunking:
-  strategy: headings_first
-  target_tokens: 512
-  overlap: 50
+  strategy: semantic
+  target_tokens: 8192
+  overlap: 200
 generation:
   resource_profile: low
   generation_workers: 2

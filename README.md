@@ -41,6 +41,47 @@ uv run synthetic-ds provider set-key fireworks
 uv run synthetic-ds run ./pdfs --resource-profile low
 ```
 
+## CLI para agentes
+
+El CLI ya puede operarse sin UI ni prompts humanos, pensado para agentes como
+OpenClawd/Hermes:
+
+```bash
+# Recomendado para agentes: usar env vars en vez de prompts/keychain
+export FIREWORKS_API_KEY=...
+
+# O guardar la key por stdin, sin interacción
+printf '%s\n' "$FIREWORKS_API_KEY" | uv run synthetic-ds provider set-key fireworks --stdin
+
+# Lanzar un job asíncrono y obtener JSON parseable
+uv run synthetic-ds submit ./pdfs --project-dir . --json
+
+# Ver estado / eventos / esperar finalización
+uv run synthetic-ds status --job-id <job_id> --json
+uv run synthetic-ds events --job-id <job_id> --json
+uv run synthetic-ds wait --job-id <job_id> --json
+
+# Ejecutar todo en foreground con resumen final en JSON
+uv run synthetic-ds run ./pdfs --project-dir . --json
+```
+
+Comandos agent-friendly nuevos:
+
+- `submit`: encola o lanza una corrida y devuelve `job_id`
+- `jobs`: lista jobs conocidos
+- `status`: devuelve el estado actual de un job
+- `events`: devuelve el journal de eventos del job
+- `wait`: bloquea hasta `completed` / `failed` / `cancelled`
+
+Para selección parcial de PDFs, un agente puede repetir `--include-file`:
+
+```bash
+uv run synthetic-ds submit ./pdfs \
+  --include-file lote-01.pdf \
+  --include-file lote-02.pdf \
+  --json
+```
+
 ## App visual local
 
 ```bash

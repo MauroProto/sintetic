@@ -19,7 +19,7 @@ export function PdfSelector({ sourceDir, selected, onChange }: Props) {
   const { data, isLoading, isError } = usePdfs(sourceDir);
   const [open, setOpen] = useState(false);
 
-  const items = data?.items ?? [];
+  const items = useMemo(() => data?.items ?? [], [data?.items]);
   const totalCount = items.length;
 
   const selectedSet = useMemo(() => {
