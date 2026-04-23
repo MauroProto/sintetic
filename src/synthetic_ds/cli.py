@@ -3,7 +3,9 @@ from __future__ import annotations
 from contextlib import ExitStack, redirect_stderr, redirect_stdout
 import io
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 import webbrowser
@@ -56,6 +58,34 @@ def _get_cli_job_runner(project_dir: Path):
     from synthetic_ds.job_runner import JobRunner
 
     return JobRunner(project_dir=project_dir, job_store=get_job_store(), secret_store=get_secret_store())
+
+
+def _spawn_detached_job_worker(*, project_dir: Path, job_id: str) -> None:
+    command = [
+        sys.executable,
+        "-c",
+        "from synthetic_ds.cli import app; app()",
+        "internal-run-job",
+        "--job-id",
+        job_id,
+        "--project-dir",
+        str(project_dir.resolve()),
+    ]
+    popen_kwargs: dict[str, object] = {
+        "cwd": str(project_dir.resolve()),
+        "env": os.environ.copy(),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        creationflags = 0
+        creationflags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        creationflags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        popen_kwargs["creationflags"] = creationflags
+    else:
+        popen_kwargs["start_new_session"] = True
+    subprocess.Popen(command, **popen_kwargs)
 
 
 def parse_bool(value: str | bool) -> bool:
@@ -278,7 +308,7 @@ def submit(
 
     init_project(project_dir)
     runner = _get_cli_job_runner(project_dir)
-    job_id = runner.start_job(
+    job_id = runner.create_job(
         source_dir=str(pdf_path),
         project_dir=str(project_dir.resolve()),
         generate_eval=parse_bool(generate_eval),
@@ -291,13 +321,30 @@ def submit(
         targets_per_chunk=targets_per_chunk,
         included_files=include_file or None,
     )
-    job = get_job_store().get_job(job_id)
+    store = get_job_store()
+    launch_error: str | None = None
+    try:
+        _spawn_detached_job_worker(project_dir=project_dir, job_id=job_id)
+    except Exception as exc:
+        launch_error = str(exc)
+        store.update_progress(
+            job_id,
+            stage="failed",
+            status="failed",
+            percent=1.0,
+            message=f"Failed to launch worker: {exc}",
+            error=str(exc),
+        )
+
+    job = store.get_job(job_id)
     if job is None:
         raise typer.Exit(code=1)
 
     payload = _job_payload(job)
     if json_output:
         _emit_json(payload)
+        if launch_error:
+            raise typer.Exit(code=1)
         return
     typer.echo(
         f"Submitted job {job.job_id}: status={job.status} stage={job.stage} "
@@ -305,6 +352,8 @@ def submit(
     )
     if payload.get("note"):
         typer.echo(str(payload["note"]))
+    if launch_error:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -512,8 +561,11 @@ def pause(
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    runner = _get_cli_job_runner(project_dir)
-    runner.control_job(job_id=job_id, action="pause")
+    _ = project_dir
+    store = get_job_store()
+    if store.get_job(job_id) is None:
+        raise typer.BadParameter(f"Unknown job '{job_id}'")
+    store.set_control_action(job_id, "pause")
     if json_output:
         _emit_json({"job_id": job_id, "action": "pause"})
         return
@@ -526,8 +578,11 @@ def resume(
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    runner = _get_cli_job_runner(project_dir)
-    runner.control_job(job_id=job_id, action="resume")
+    _ = project_dir
+    store = get_job_store()
+    if store.get_job(job_id) is None:
+        raise typer.BadParameter(f"Unknown job '{job_id}'")
+    store.set_control_action(job_id, "resume")
     if json_output:
         _emit_json({"job_id": job_id, "action": "resume"})
         return
@@ -540,12 +595,24 @@ def cancel(
     project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
     json_output: bool = typer.Option(False, "--json"),
 ) -> None:
-    runner = _get_cli_job_runner(project_dir)
-    runner.control_job(job_id=job_id, action="cancel")
+    _ = project_dir
+    store = get_job_store()
+    if store.get_job(job_id) is None:
+        raise typer.BadParameter(f"Unknown job '{job_id}'")
+    store.set_control_action(job_id, "cancel")
     if json_output:
         _emit_json({"job_id": job_id, "action": "cancel"})
         return
     typer.echo(f"Cancel requested for {job_id}")
+
+
+@app.command("internal-run-job", hidden=True)
+def internal_run_job(
+    job_id: str = typer.Option(..., "--job-id"),
+    project_dir: Path = typer.Option(Path("."), "--project-dir", file_okay=False, dir_okay=True),
+) -> None:
+    runner = _get_cli_job_runner(project_dir)
+    runner.run_registered_job(job_id)
 
 
 @app.command()
@@ -668,3 +735,7 @@ def provider_test(
         _emit_json({"provider": selected, "response": payload})
         return
     typer.echo(f"Provider {selected} responded with: {payload}")
+
+
+if __name__ == "__main__":
+    app()

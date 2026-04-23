@@ -87,57 +87,18 @@ class JobRunner:
         included_files: list[str] | None = None,
     ) -> str:
         with self._lock:
-            source_path = Path(source_dir).resolve()
-            job_id = uuid.uuid4().hex[:12]
-            run_dir = build_run_output_dir(source_path)
-            paths, config = _paths_and_config(Path(project_dir), run_dir=run_dir, work_subdir=job_id)
-            config = self._apply_parser_mode(config, parser_mode)
-            all_paths = discover_pdf_paths(source_path, recursive=True)
-            if len(all_paths) < 1:
-                raise RuntimeError("No se encontraron PDFs elegibles en la carpeta indicada.")
-
-            ingest_path = source_path
-            selection_dir_str: str | None = None
-            if included_files is not None:
-                selected = self._resolve_included_files(source_path, all_paths, included_files)
-                if len(selected) < 1:
-                    raise RuntimeError("Debes incluir al menos un PDF.")
-                ingest_path = self._materialize_selection(run_dir=run_dir, job_id=job_id, files=selected)
-                selection_dir_str = str(ingest_path)
-                pdf_count = len(selected)
-            else:
-                pdf_count = len(all_paths)
-            dataset_mode = detect_dataset_mode(pdf_count)
-            effective_generate_eval = dataset_mode == "multi_document"
-            config.generation.resource_profile = resource_profile
-            config.generation.generation_workers = generation_workers or config.generation.generation_workers
-            config.generation.judge_workers = judge_workers or config.generation.judge_workers
-            config.generation.page_batch_size = max(1, page_batch_size)
-            config.generation.batch_pause_seconds = max(0.0, batch_pause_seconds)
-            config.generation.targets_per_chunk = max(1, targets_per_chunk)
-            profile = config.providers.profile_for()
-            job_id = self.job_store.create_job(
-                job_id=job_id,
+            job_id, ingest_path, effective_generate_eval, config, run_dir = self._register_job(
                 source_dir=source_dir,
-                provider=config.providers.active,
-                model=profile.model,
-                config={
-                    "generate_eval": effective_generate_eval,
-                    "generate_eval_requested": generate_eval,
-                    "dataset_mode": dataset_mode,
-                    "dataset_mode_note": dataset_mode_summary(dataset_mode, pdf_count=pdf_count),
-                    "parser_mode": parser_mode,
-                    "resource_profile": config.generation.resource_profile,
-                    "generation_workers": config.generation.generation_workers,
-                    "judge_workers": config.generation.judge_workers,
-                    "page_batch_size": config.generation.page_batch_size,
-                    "batch_pause_seconds": config.generation.batch_pause_seconds,
-                    "targets_per_chunk": config.generation.targets_per_chunk,
-                    "included_files": included_files if included_files is not None else None,
-                    "selection_dir": selection_dir_str,
-                    "pdf_count": pdf_count,
-                },
-                artifacts_dir=str(paths.run_dir),
+                project_dir=project_dir,
+                generate_eval=generate_eval,
+                parser_mode=parser_mode,
+                resource_profile=resource_profile,
+                generation_workers=generation_workers,
+                judge_workers=judge_workers,
+                page_batch_size=page_batch_size,
+                batch_pause_seconds=batch_pause_seconds,
+                targets_per_chunk=targets_per_chunk,
+                included_files=included_files,
             )
 
             has_slot = sum(1 for t in self._threads.values() if t.is_alive()) < self.max_concurrent_jobs
@@ -161,6 +122,106 @@ class JobRunner:
                 )
                 log_event(logger, logging.INFO, "job_queued", job_id=job_id, queue_len=len(self._queue))
             return job_id
+
+    def create_job(
+        self,
+        *,
+        source_dir: str,
+        project_dir: str,
+        generate_eval: bool,
+        parser_mode: str,
+        resource_profile: str = "low",
+        generation_workers: int | None = None,
+        judge_workers: int | None = None,
+        page_batch_size: int = 100,
+        batch_pause_seconds: float = 2.0,
+        targets_per_chunk: int = 3,
+        included_files: list[str] | None = None,
+    ) -> str:
+        with self._lock:
+            job_id, _ingest_path, _generate_eval, _config, _run_dir = self._register_job(
+                source_dir=source_dir,
+                project_dir=project_dir,
+                generate_eval=generate_eval,
+                parser_mode=parser_mode,
+                resource_profile=resource_profile,
+                generation_workers=generation_workers,
+                judge_workers=judge_workers,
+                page_batch_size=page_batch_size,
+                batch_pause_seconds=batch_pause_seconds,
+                targets_per_chunk=targets_per_chunk,
+                included_files=included_files,
+            )
+            return job_id
+
+    def _register_job(
+        self,
+        *,
+        source_dir: str,
+        project_dir: str,
+        generate_eval: bool,
+        parser_mode: str,
+        resource_profile: str = "low",
+        generation_workers: int | None = None,
+        judge_workers: int | None = None,
+        page_batch_size: int = 100,
+        batch_pause_seconds: float = 2.0,
+        targets_per_chunk: int = 3,
+        included_files: list[str] | None = None,
+    ) -> tuple[str, Path, bool, ProjectConfig, Path]:
+        source_path = Path(source_dir).resolve()
+        job_id = uuid.uuid4().hex[:12]
+        run_dir = build_run_output_dir(source_path)
+        paths, config = _paths_and_config(Path(project_dir), run_dir=run_dir, work_subdir=job_id)
+        config = self._apply_parser_mode(config, parser_mode)
+        all_paths = discover_pdf_paths(source_path, recursive=True)
+        if len(all_paths) < 1:
+            raise RuntimeError("No se encontraron PDFs elegibles en la carpeta indicada.")
+
+        ingest_path = source_path
+        selection_dir_str: str | None = None
+        if included_files is not None:
+            selected = self._resolve_included_files(source_path, all_paths, included_files)
+            if len(selected) < 1:
+                raise RuntimeError("Debes incluir al menos un PDF.")
+            ingest_path = self._materialize_selection(run_dir=run_dir, job_id=job_id, files=selected)
+            selection_dir_str = str(ingest_path)
+            pdf_count = len(selected)
+        else:
+            pdf_count = len(all_paths)
+        dataset_mode = detect_dataset_mode(pdf_count)
+        effective_generate_eval = dataset_mode == "multi_document"
+        config.generation.resource_profile = resource_profile
+        config.generation.generation_workers = generation_workers or config.generation.generation_workers
+        config.generation.judge_workers = judge_workers or config.generation.judge_workers
+        config.generation.page_batch_size = max(1, page_batch_size)
+        config.generation.batch_pause_seconds = max(0.0, batch_pause_seconds)
+        config.generation.targets_per_chunk = max(1, targets_per_chunk)
+        profile = config.providers.profile_for()
+        job_id = self.job_store.create_job(
+            job_id=job_id,
+            source_dir=source_dir,
+            provider=config.providers.active,
+            model=profile.model,
+            config={
+                "generate_eval": effective_generate_eval,
+                "generate_eval_requested": generate_eval,
+                "dataset_mode": dataset_mode,
+                "dataset_mode_note": dataset_mode_summary(dataset_mode, pdf_count=pdf_count),
+                "parser_mode": parser_mode,
+                "resource_profile": config.generation.resource_profile,
+                "generation_workers": config.generation.generation_workers,
+                "judge_workers": config.generation.judge_workers,
+                "page_batch_size": config.generation.page_batch_size,
+                "batch_pause_seconds": config.generation.batch_pause_seconds,
+                "targets_per_chunk": config.generation.targets_per_chunk,
+                "included_files": included_files if included_files is not None else None,
+                "selection_dir": selection_dir_str,
+                "pdf_count": pdf_count,
+            },
+            artifacts_dir=str(paths.run_dir),
+        )
+        return job_id, ingest_path, effective_generate_eval, config, run_dir
 
     def _resolve_included_files(
         self, source_path: Path, all_paths: list[Path], included: list[str]
@@ -286,6 +347,10 @@ class JobRunner:
         selection_dir = job.config.get("selection_dir")
         ingest_source = Path(selection_dir) if selection_dir else Path(job.source_dir).resolve()
         return config, ingest_source, generate_eval, run_dir
+
+    def run_registered_job(self, job_id: str) -> None:
+        config, source_path, generate_eval, run_dir = self._config_for_job(job_id)
+        self._run_job(job_id, source_path, generate_eval, config, run_dir)
 
     def control_job(self, *, job_id: str, action: str) -> None:
         if action not in {"pause", "resume", "cancel"}:

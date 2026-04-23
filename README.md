@@ -65,6 +65,10 @@ uv run synthetic-ds wait --job-id <job_id> --json
 uv run synthetic-ds run ./pdfs --project-dir . --json
 ```
 
+`submit` ahora crea el job y dispara un worker desacoplado del proceso CLI
+actual, para que `status` / `events` / `wait` sigan funcionando aunque el
+proceso que lanzó el comando ya haya terminado.
+
 Comandos agent-friendly nuevos:
 
 - `submit`: encola o lanza una corrida y devuelve `job_id`
