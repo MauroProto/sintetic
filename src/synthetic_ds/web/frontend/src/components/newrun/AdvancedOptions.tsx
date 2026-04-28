@@ -2,6 +2,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CreateJobInput } from "@/lib/types";
 
+const QUALITY_PRESETS = {
+  strict: { label: "Strict (0.85)", threshold: 0.85 },
+  balanced: { label: "Balanceado (0.70)", threshold: 0.7 },
+  permissive: { label: "Permisivo (0.55)", threshold: 0.55 },
+} as const;
+
 interface Props {
   values: CreateJobInput;
   onChange: (partial: Partial<CreateJobInput>) => void;
@@ -84,6 +90,68 @@ export function AdvancedOptions({ values, onChange }: Props) {
           max={20}
           value={values.targets_per_chunk}
           onChange={(event) => onChange({ targets_per_chunk: Math.max(1, Number(event.target.value) || 1) })}
+        />
+      </Field>
+      <Field label="Máx. PDFs">
+        <Input
+          type="number"
+          min={1}
+          placeholder="Todos"
+          value={values.max_pdfs ?? ""}
+          onChange={(event) =>
+            onChange({ max_pdfs: event.target.value ? Math.max(1, Number(event.target.value) || 1) : null })
+          }
+        />
+      </Field>
+      <Field label="Máx. páginas/chunk">
+        <Input
+          type="number"
+          min={1}
+          value={values.max_pages_per_chunk ?? 25}
+          onChange={(event) => onChange({ max_pages_per_chunk: Math.max(1, Number(event.target.value) || 1) })}
+        />
+      </Field>
+      <Field label="Calidad">
+        <Select
+          value={values.quality_preset ?? "balanced"}
+          onValueChange={(value) =>
+            onChange({
+              quality_preset: value as CreateJobInput["quality_preset"],
+              min_groundedness_score: null,
+              min_overall_score: null,
+            })
+          }
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {Object.entries(QUALITY_PRESETS).map(([value, preset]) => (
+              <SelectItem key={value} value={value}>
+                {preset.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      <Field label="Groundedness mínima">
+        <Input
+          type="number"
+          min={0}
+          max={1}
+          step="0.05"
+          value={values.min_groundedness_score ?? QUALITY_PRESETS[values.quality_preset ?? "balanced"].threshold}
+          onChange={(event) => onChange({ min_groundedness_score: Number(event.target.value) || 0 })}
+        />
+      </Field>
+      <Field label="Overall mínimo">
+        <Input
+          type="number"
+          min={0}
+          max={1}
+          step="0.05"
+          value={values.min_overall_score ?? QUALITY_PRESETS[values.quality_preset ?? "balanced"].threshold}
+          onChange={(event) => onChange({ min_overall_score: Number(event.target.value) || 0 })}
         />
       </Field>
     </div>

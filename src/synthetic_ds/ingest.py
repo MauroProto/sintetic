@@ -123,6 +123,45 @@ def _ocr_page_text(page: fitz.Page) -> str:
         return ""
 
 
+def _pdf_page_count(path: Path) -> int | None:
+    try:
+        with fitz.open(path) as doc:
+            return doc.page_count
+    except Exception:
+        return None
+
+
+def _available_ram_mb() -> int | None:
+    meminfo = Path("/proc/meminfo")
+    if meminfo.exists():
+        for line in meminfo.read_text(encoding="utf-8", errors="ignore").splitlines():
+            if line.startswith("MemAvailable:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    return int(int(parts[1]) / 1024)
+    try:
+        pages = int(getattr(__import__("os"), "sysconf")("SC_AVPHYS_PAGES"))
+        page_size = int(getattr(__import__("os"), "sysconf")("SC_PAGE_SIZE"))
+        return int((pages * page_size) / (1024 * 1024))
+    except Exception:
+        return None
+
+
+def _should_skip_docling(
+    path: Path,
+    *,
+    docling_max_pages: int | None,
+    docling_max_ram_mb: int | None,
+) -> tuple[bool, str | None, int | None]:
+    page_count = _pdf_page_count(path)
+    if docling_max_pages is not None and page_count is not None and page_count > docling_max_pages:
+        return True, "docling_max_pages", page_count
+    available_ram = _available_ram_mb()
+    if docling_max_ram_mb is not None and available_ram is not None and available_ram < docling_max_ram_mb:
+        return True, "docling_max_ram_mb", page_count
+    return False, None, page_count
+
+
 def parse_pdf_with_pymupdf(
     path: Path,
     default_language: str,
@@ -224,12 +263,35 @@ def parse_pdf(
     ocr_text_min_chars: int = 80,
     render_page_images: bool = True,
     page_image_dpi: int = 144,
+    docling_max_pages: int | None = None,
+    docling_max_ram_mb: int | None = None,
 ) -> DocumentRecord:
     parser_order = [primary_parser, fallback_parser]
     last_error: Exception | None = None
+    skipped_docling = False
+    skip_reason: str | None = None
+    skip_page_count: int | None = None
     for parser_name in parser_order:
         try:
             if parser_name == "docling":
+                if not skipped_docling:
+                    skipped_docling, skip_reason, skip_page_count = _should_skip_docling(
+                        path,
+                        docling_max_pages=docling_max_pages,
+                        docling_max_ram_mb=docling_max_ram_mb,
+                    )
+                if skipped_docling:
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "docling_skipped_by_resource_guard",
+                        source=str(path),
+                        reason=skip_reason,
+                        page_count=skip_page_count,
+                        docling_max_pages=docling_max_pages,
+                        docling_max_ram_mb=docling_max_ram_mb,
+                    )
+                    continue
                 try:
                     from docling.document_converter import DocumentConverter  # type: ignore
                 except Exception as exc:  # pragma: no cover - optional dependency
@@ -258,7 +320,7 @@ def parse_pdf(
                     }
                 )
             if parser_name == "pymupdf":
-                return parse_pdf_with_pymupdf(
+                record = parse_pdf_with_pymupdf(
                     path,
                     default_language=default_language,
                     page_asset_dir=page_asset_dir,
@@ -267,6 +329,16 @@ def parse_pdf(
                     render_page_images=render_page_images,
                     page_image_dpi=page_image_dpi,
                 )
+                if skipped_docling and skip_reason:
+                    return record.model_copy(
+                        update={
+                            "metadata": {
+                                **record.metadata,
+                                "parser_skip_reason": skip_reason,
+                            }
+                        }
+                    )
+                return record
         except Exception as exc:  # pragma: no cover - exercised through fallback behavior
             log_event(
                 logger,
@@ -304,10 +376,16 @@ def ingest_directory(
     ocr_text_min_chars: int = 80,
     render_page_images: bool = True,
     page_image_dpi: int = 144,
+    max_pages_per_chunk: int | None = None,
+    max_documents: int | None = None,
+    docling_max_pages: int | None = None,
+    docling_max_ram_mb: int | None = None,
 ) -> IngestResult:
     documents: list[DocumentRecord] = []
     chunks = []
     pdf_paths = discover_pdf_paths(pdf_dir, recursive=recursive)
+    if max_documents is not None:
+        pdf_paths = pdf_paths[: max(0, max_documents)]
     for path in pdf_paths:
         document = parse_pdf(
             path,
@@ -319,6 +397,8 @@ def ingest_directory(
             ocr_text_min_chars=ocr_text_min_chars,
             render_page_images=render_page_images,
             page_image_dpi=page_image_dpi,
+            docling_max_pages=docling_max_pages,
+            docling_max_ram_mb=docling_max_ram_mb,
         )
         documents.append(document)
         chunks.extend(
@@ -327,6 +407,7 @@ def ingest_directory(
                 target_tokens=target_tokens,
                 overlap=overlap,
                 strategy=chunking_strategy,
+                max_pages_per_chunk=max_pages_per_chunk,
             )
         )
     return IngestResult(documents=documents, chunks=attach_neighbors(chunks))

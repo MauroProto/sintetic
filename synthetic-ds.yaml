@@ -58,10 +58,15 @@ parsing:
   render_page_images: true
   page_image_dpi: 144
   multimodal_max_pages_per_chunk: 2
+  docling_max_pages: 100
+  docling_max_ram_mb: 3072
+  docling_streaming: true
+  oom_cooldown_chunks: 5
 chunking:
   strategy: semantic
   target_tokens: 8192
   overlap: 200
+  max_pages_per_chunk: 25
 generation:
   resource_profile: low
   generation_workers: 2
@@ -83,9 +88,10 @@ generation:
     en el documento provisto.
 filters:
   preset: balanced
-  groundedness_threshold: 0.7
-  overall_threshold: 0.7
+  groundedness_threshold: null
+  overall_threshold: null
 review:
   sample_size: 100
 export:
   require_eval_split: true
+  allow_partial_export: false

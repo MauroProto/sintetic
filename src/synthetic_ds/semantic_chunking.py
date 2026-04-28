@@ -267,8 +267,10 @@ def _split_large_section(section: SemanticSection, max_tokens: int) -> list[Sema
     parts: list[SemanticSection] = []
     text = section.full_text
     
-    # Dividir por párrafos dobles (saltos de línea)
-    paragraphs = re.split(r'\n\s*\n', text)
+    # Dividir por párrafos dobles. Algunos parsers, especialmente Docling sobre
+    # libros grandes, pueden devolver texto casi continuo; en ese caso caemos a
+    # oraciones y finalmente a ventanas de palabras.
+    paragraphs = _split_text_units(text, max_tokens=max_tokens)
     
     current_text = ""
     current_start = section.page_start
@@ -305,6 +307,26 @@ def _split_large_section(section: SemanticSection, max_tokens: int) -> list[Sema
         ))
     
     return parts
+
+
+def _split_text_units(text: str, *, max_tokens: int) -> list[str]:
+    paragraph_units = [item.strip() for item in re.split(r'\n\s*\n', text) if item.strip()]
+    if len(paragraph_units) > 1:
+        return paragraph_units
+
+    sentence_units = [
+        item.strip()
+        for item in re.split(r'(?<=[.!?。！？])\s+', text)
+        if item.strip()
+    ]
+    if len(sentence_units) > 1:
+        return sentence_units
+
+    words = text.split()
+    if not words:
+        return []
+    window_size = max(1, max_tokens)
+    return [" ".join(words[index:index + window_size]) for index in range(0, len(words), window_size)]
 
 
 def create_semantic_chunks(

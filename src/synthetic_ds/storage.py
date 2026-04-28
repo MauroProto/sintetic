@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Iterable, TypeVar
 
 from pydantic import BaseModel
@@ -10,6 +11,17 @@ from pydantic import BaseModel
 from synthetic_ds.models import ProjectPaths
 
 T = TypeVar("T", bound=BaseModel)
+
+PHASES = [
+    "ingest",
+    "split",
+    "generate_train",
+    "judge_train",
+    "generate_eval",
+    "judge_eval",
+    "export",
+    "report",
+]
 
 
 def build_run_output_dir(source_path: Path, *, job_id: str | None = None) -> Path:
@@ -99,6 +111,38 @@ def read_json(path: Path) -> dict:
     if not path.exists():
         return {}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def save_phase_checkpoint(
+    work_dir: Path,
+    phase: str,
+    *,
+    output_files: Iterable[Path | str] = (),
+    stats: dict | None = None,
+) -> Path:
+    if phase not in PHASES:
+        raise ValueError(f"Unknown checkpoint phase '{phase}'")
+    checkpoint_path = work_dir / "checkpoints" / f"{phase}.json"
+    payload = {
+        "phase": phase,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+        "output_files": [str(path) for path in output_files],
+        "stats": stats or {},
+    }
+    write_json(payload, checkpoint_path)
+    return checkpoint_path
+
+
+def detect_completed_phases(work_dir: Path) -> list[str]:
+    checkpoint_dir = work_dir / "checkpoints"
+    if not checkpoint_dir.exists():
+        return []
+    completed: list[str] = []
+    for phase in PHASES:
+        payload = read_json(checkpoint_dir / f"{phase}.json")
+        if payload.get("phase") == phase:
+            completed.append(phase)
+    return completed
 
 
 def write_csv_rows(rows: list[dict[str, object]], path: Path) -> None:

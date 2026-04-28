@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 from synthetic_ds.generate import normalize_question_type
 from synthetic_ds.models import GeneratedExample, ReviewItem, SplitManifest, TrainingRecord
+
+
+logger = logging.getLogger("synthetic_ds.exporter")
 
 
 def build_training_record(example: GeneratedExample, *, system_prompt: str, split: str) -> TrainingRecord:
@@ -62,10 +67,16 @@ def validate_export_guardrails(
     eval_examples: list[GeneratedExample] | list[object],
     manifest: SplitManifest,
     require_eval: bool,
+    allow_partial: bool = False,
 ) -> None:
     if not train_examples:
         raise RuntimeError("No hay ejemplos de train curados para exportar.")
     if manifest.dataset_mode == "single_document":
         return
     if require_eval and (not manifest.eval_doc_ids or not eval_examples):
+        if allow_partial:
+            logger.warning(
+                "eval split incompleto. train exportado parcialmente; eval se puede reconstruir despues."
+            )
+            return
         raise RuntimeError("No se puede exportar sin un eval no vacio. Agrega mas PDFs o habilita generate_eval.")

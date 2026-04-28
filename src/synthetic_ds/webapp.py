@@ -245,6 +245,11 @@ def create_app(
         page_batch_size: int = Form(100),
         batch_pause_seconds: float = Form(2.0),
         targets_per_chunk: int = Form(3),
+        max_pdfs: int | None = Form(None),
+        max_pages_per_chunk: int | None = Form(None),
+        quality_preset: str | None = Form(None),
+        min_groundedness_score: float | None = Form(None),
+        min_overall_score: float | None = Form(None),
         included_files: str | None = Form(None),
     ) -> JSONResponse:
         generate_eval_flag = generate_eval.strip().lower() in {"1", "true", "yes", "on"}
@@ -284,6 +289,11 @@ def create_app(
                 page_batch_size=page_batch_size,
                 batch_pause_seconds=batch_pause_seconds,
                 targets_per_chunk=targets_per_chunk,
+                max_pdfs=max_pdfs,
+                max_pages_per_chunk=max_pages_per_chunk,
+                quality_preset=quality_preset,
+                min_groundedness_score=min_groundedness_score,
+                min_overall_score=min_overall_score,
                 included_files=parsed_included,
             )
         except RuntimeError as exc:

@@ -2,6 +2,8 @@
 
 CLI local para generar datasets sintéticos desde PDFs con múltiples proveedores OpenAI-compatible.
 
+Para automatización con agentes externos, ver [AGENTS.md](AGENTS.md).
+
 ## 🧠 Chunking Semántico Inteligente (Nuevo)
 
 El sistema ahora incluye un **chunking semántico inteligente** que:
@@ -20,6 +22,7 @@ chunking:
   strategy: semantic          # "semantic" (recomendado) o "headings_first" (legacy)
   target_tokens: 8192         # Tamaño objetivo por chunk (~capítulo completo)
   overlap: 200                # Tokens de overlap entre chunks
+  max_pages_per_chunk: 25     # Guardia para PDFs/libros muy grandes o con poco texto por página
 ```
 
 ### Comparación: Antes vs Ahora
@@ -53,8 +56,24 @@ export FIREWORKS_API_KEY=...
 # O guardar la key por stdin, sin interacción
 printf '%s\n' "$FIREWORKS_API_KEY" | uv run synthetic-ds provider set-key fireworks --stdin
 
+# Diagnóstico no interactivo antes de lanzar lotes largos
+uv run synthetic-ds doctor --project-dir . --json
+
 # Lanzar un job asíncrono y obtener JSON parseable
 uv run synthetic-ds submit ./pdfs --project-dir . --json
+
+# Exigir corpus de alta calidad para agentes/evaluación interna
+uv run synthetic-ds submit ./pdfs \
+  --project-dir . \
+  --parser-mode fast \
+  --agent \
+  --allow-partial-export \
+  --max-pdfs 10 \
+  --max-pages-per-chunk 25 \
+  --quality-preset strict \
+  --min-groundedness-score 0.8 \
+  --min-overall-score 0.8 \
+  --json
 
 # Ver estado / eventos / esperar finalización
 uv run synthetic-ds status --job-id <job_id> --json
@@ -62,7 +81,13 @@ uv run synthetic-ds events --job-id <job_id> --json
 uv run synthetic-ds wait --job-id <job_id> --json
 
 # Ejecutar todo en foreground con resumen final en JSON
-uv run synthetic-ds run ./pdfs --project-dir . --json
+uv run synthetic-ds run ./pdfs --project-dir . --parser-mode fast --agent --json
+
+# Resumir una corrida cortada y continuar desde el primer checkpoint faltante
+uv run synthetic-ds run ./pdfs --project-dir . --resume --json
+
+# Reconstruir solo eval cuando train ya quedó curado
+uv run synthetic-ds run ./pdfs --project-dir . --from-phase judge_eval --only-eval --allow-partial-export --json
 ```
 
 `submit` ahora crea el job y dispara un worker desacoplado del proceso CLI
@@ -76,6 +101,24 @@ Comandos agent-friendly nuevos:
 - `status`: devuelve el estado actual de un job
 - `events`: devuelve el journal de eventos del job
 - `wait`: bloquea hasta `completed` / `failed` / `cancelled`
+- `doctor`: revisa dependencias, OCR, parser y provider key en JSON
+- `--resume`: salta fases con checkpoint en `.work/checkpoints/`
+- `--from-phase`: fuerza recomenzar desde una fase (`ingest`, `split`, `generate_train`, `judge_train`, `generate_eval`, `judge_eval`, `export`, `report`). También acepta alias `generate` y `judge`.
+- `--only-train` / `--only-eval`: limita generación/curado a un split
+- `--allow-partial-export`: exporta train aunque eval siga incompleto
+- `--agent`: fuerza defaults conservadores para ejecución no interactiva
+
+Para apuntar a un corpus más estricto, usá `--min-overall-score 0.8` y
+`--min-groundedness-score 0.8`. Eso no entrena un modelo ni garantiza una
+métrica externa de `0.8`; garantiza que el export solo incluya ejemplos que el
+judge interno puntuó por encima de esos umbrales.
+
+Para carpetas con muchos libros/PDFs, `--max-pdfs N` limita cuántos documentos
+se toman de la carpeta ordenada. Para PDFs enormes, `--max-pages-per-chunk N`
+evita chunks que abarquen demasiadas páginas aunque tengan pocos tokens.
+Además, `parsing.docling_max_pages` y `parsing.docling_max_ram_mb` saltan a
+PyMuPDF antes de intentar Docling cuando el libro es demasiado grande para el
+entorno.
 
 Para selección parcial de PDFs, un agente puede repetir `--include-file`:
 

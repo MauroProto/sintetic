@@ -12,6 +12,16 @@ import type { ProjectConfig } from "@/lib/types";
 
 const MonacoEditor = lazy(() => import("@monaco-editor/react"));
 
+const FILTER_PRESETS = {
+  strict: { groundedness: 0.85, overall: 0.85 },
+  balanced: { groundedness: 0.7, overall: 0.7 },
+  permissive: { groundedness: 0.55, overall: 0.55 },
+} as const;
+
+function presetValues(preset: string) {
+  return FILTER_PRESETS[preset as keyof typeof FILTER_PRESETS] ?? FILTER_PRESETS.balanced;
+}
+
 export function ConfigEditor() {
   const { data, isLoading } = useConfig();
   const saveConfig = useSaveConfig();
@@ -145,6 +155,14 @@ export function ConfigEditor() {
                 onChange={(event) => updateSection("chunking", { overlap: Number(event.target.value) || 0 })}
               />
             </Field>
+            <Field label="Máx. páginas/chunk">
+              <Input
+                type="number"
+                min={1}
+                value={config.chunking.max_pages_per_chunk ?? 25}
+                onChange={(event) => updateSection("chunking", { max_pages_per_chunk: Math.max(1, Number(event.target.value) || 1) })}
+              />
+            </Field>
           </div>
         </Section>
 
@@ -207,7 +225,13 @@ export function ConfigEditor() {
             <Field label="Preset">
               <Select
                 value={config.filters.preset}
-                onValueChange={(value) => updateSection("filters", { preset: value })}
+                onValueChange={(value) =>
+                  updateSection("filters", {
+                    preset: value,
+                    groundedness_threshold: null,
+                    overall_threshold: null,
+                  })
+                }
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -223,7 +247,7 @@ export function ConfigEditor() {
                 step="0.05"
                 min={0}
                 max={1}
-                value={config.filters.groundedness_threshold}
+                value={config.filters.groundedness_threshold ?? presetValues(config.filters.preset).groundedness}
                 onChange={(event) => updateSection("filters", { groundedness_threshold: Number(event.target.value) || 0 })}
               />
             </Field>
@@ -233,7 +257,7 @@ export function ConfigEditor() {
                 step="0.05"
                 min={0}
                 max={1}
-                value={config.filters.overall_threshold}
+                value={config.filters.overall_threshold ?? presetValues(config.filters.preset).overall}
                 onChange={(event) => updateSection("filters", { overall_threshold: Number(event.target.value) || 0 })}
               />
             </Field>

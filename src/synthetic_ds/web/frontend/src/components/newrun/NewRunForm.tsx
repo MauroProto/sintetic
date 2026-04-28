@@ -22,6 +22,11 @@ const DEFAULT_VALUES: CreateJobInput = {
   page_batch_size: 100,
   batch_pause_seconds: 2,
   targets_per_chunk: 3,
+  max_pdfs: null,
+  max_pages_per_chunk: 25,
+  quality_preset: "balanced",
+  min_groundedness_score: null,
+  min_overall_score: null,
   included_files: null,
 };
 

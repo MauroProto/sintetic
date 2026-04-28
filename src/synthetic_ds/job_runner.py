@@ -13,7 +13,7 @@ from synthetic_ds.cli import (
     _paths_and_config,
     build_backend,
 )
-from synthetic_ds.config import ProjectConfig
+from synthetic_ds.config import ProjectConfig, apply_quality_overrides
 from synthetic_ds.ingest import discover_pdf_paths
 from synthetic_ds.models import ChunkRecord
 from synthetic_ds.obs import get_logger, log_event
@@ -85,6 +85,13 @@ class JobRunner:
         batch_pause_seconds: float = 2.0,
         targets_per_chunk: int = 3,
         included_files: list[str] | None = None,
+        max_pdfs: int | None = None,
+        max_pages_per_chunk: int | None = None,
+        quality_preset: str | None = None,
+        min_groundedness_score: float | None = None,
+        min_overall_score: float | None = None,
+        allow_partial_export: bool = False,
+        agent_mode: bool = False,
     ) -> str:
         with self._lock:
             job_id, ingest_path, effective_generate_eval, config, run_dir = self._register_job(
@@ -99,6 +106,13 @@ class JobRunner:
                 batch_pause_seconds=batch_pause_seconds,
                 targets_per_chunk=targets_per_chunk,
                 included_files=included_files,
+                max_pdfs=max_pdfs,
+                max_pages_per_chunk=max_pages_per_chunk,
+                quality_preset=quality_preset,
+                min_groundedness_score=min_groundedness_score,
+                min_overall_score=min_overall_score,
+                allow_partial_export=allow_partial_export,
+                agent_mode=agent_mode,
             )
 
             has_slot = sum(1 for t in self._threads.values() if t.is_alive()) < self.max_concurrent_jobs
@@ -137,6 +151,13 @@ class JobRunner:
         batch_pause_seconds: float = 2.0,
         targets_per_chunk: int = 3,
         included_files: list[str] | None = None,
+        max_pdfs: int | None = None,
+        max_pages_per_chunk: int | None = None,
+        quality_preset: str | None = None,
+        min_groundedness_score: float | None = None,
+        min_overall_score: float | None = None,
+        allow_partial_export: bool = False,
+        agent_mode: bool = False,
     ) -> str:
         with self._lock:
             job_id, _ingest_path, _generate_eval, _config, _run_dir = self._register_job(
@@ -151,6 +172,13 @@ class JobRunner:
                 batch_pause_seconds=batch_pause_seconds,
                 targets_per_chunk=targets_per_chunk,
                 included_files=included_files,
+                max_pdfs=max_pdfs,
+                max_pages_per_chunk=max_pages_per_chunk,
+                quality_preset=quality_preset,
+                min_groundedness_score=min_groundedness_score,
+                min_overall_score=min_overall_score,
+                allow_partial_export=allow_partial_export,
+                agent_mode=agent_mode,
             )
             return job_id
 
@@ -168,6 +196,13 @@ class JobRunner:
         batch_pause_seconds: float = 2.0,
         targets_per_chunk: int = 3,
         included_files: list[str] | None = None,
+        max_pdfs: int | None = None,
+        max_pages_per_chunk: int | None = None,
+        quality_preset: str | None = None,
+        min_groundedness_score: float | None = None,
+        min_overall_score: float | None = None,
+        allow_partial_export: bool = False,
+        agent_mode: bool = False,
     ) -> tuple[str, Path, bool, ProjectConfig, Path]:
         source_path = Path(source_dir).resolve()
         job_id = uuid.uuid4().hex[:12]
@@ -180,13 +215,22 @@ class JobRunner:
 
         ingest_path = source_path
         selection_dir_str: str | None = None
+        selected_paths: list[Path] | None = None
         if included_files is not None:
-            selected = self._resolve_included_files(source_path, all_paths, included_files)
-            if len(selected) < 1:
+            selected_paths = self._resolve_included_files(source_path, all_paths, included_files)
+            if max_pdfs is not None:
+                selected_paths = selected_paths[:max(0, max_pdfs)]
+            if len(selected_paths) < 1:
                 raise RuntimeError("Debes incluir al menos un PDF.")
-            ingest_path = self._materialize_selection(run_dir=run_dir, job_id=job_id, files=selected)
+        elif max_pdfs is not None:
+            selected_paths = all_paths[:max(0, max_pdfs)]
+            if len(selected_paths) < 1:
+                raise RuntimeError("Debes incluir al menos un PDF.")
+
+        if selected_paths is not None:
+            ingest_path = self._materialize_selection(run_dir=run_dir, job_id=job_id, files=selected_paths)
             selection_dir_str = str(ingest_path)
-            pdf_count = len(selected)
+            pdf_count = len(selected_paths)
         else:
             pdf_count = len(all_paths)
         dataset_mode = detect_dataset_mode(pdf_count)
@@ -197,6 +241,23 @@ class JobRunner:
         config.generation.page_batch_size = max(1, page_batch_size)
         config.generation.batch_pause_seconds = max(0.0, batch_pause_seconds)
         config.generation.targets_per_chunk = max(1, targets_per_chunk)
+        if agent_mode:
+            profile = config.providers.profile_for()
+            profile.concurrency = min(profile.concurrency, 2)
+            config.generation.backend = "sync_pool"
+            config.generation.generation_workers = 1
+            config.generation.judge_workers = 1
+            config.generation.batch_pause_seconds = max(config.generation.batch_pause_seconds, 5.0)
+        if max_pages_per_chunk is not None:
+            config.chunking.max_pages_per_chunk = max(1, max_pages_per_chunk)
+        if allow_partial_export:
+            config.export.allow_partial_export = True
+        config = apply_quality_overrides(
+            config,
+            quality_preset=quality_preset,
+            min_groundedness_score=min_groundedness_score,
+            min_overall_score=min_overall_score,
+        )
         profile = config.providers.profile_for()
         job_id = self.job_store.create_job(
             job_id=job_id,
@@ -215,6 +276,13 @@ class JobRunner:
                 "page_batch_size": config.generation.page_batch_size,
                 "batch_pause_seconds": config.generation.batch_pause_seconds,
                 "targets_per_chunk": config.generation.targets_per_chunk,
+                "max_pdfs": max_pdfs,
+                "max_pages_per_chunk": config.chunking.max_pages_per_chunk,
+                "quality_preset": config.filters.preset,
+                "min_groundedness_score": config.filters.effective_groundedness,
+                "min_overall_score": config.filters.effective_overall,
+                "allow_partial_export": config.export.allow_partial_export,
+                "agent_mode": agent_mode,
                 "included_files": included_files if included_files is not None else None,
                 "selection_dir": selection_dir_str,
                 "pdf_count": pdf_count,
@@ -342,6 +410,16 @@ class JobRunner:
         )
         config.generation.targets_per_chunk = int(
             job.config.get("targets_per_chunk", config.generation.targets_per_chunk)
+        )
+        if job.config.get("max_pages_per_chunk") is not None:
+            config.chunking.max_pages_per_chunk = int(job.config["max_pages_per_chunk"])
+        if job.config.get("allow_partial_export"):
+            config.export.allow_partial_export = True
+        config = apply_quality_overrides(
+            config,
+            quality_preset=job.config.get("quality_preset"),
+            min_groundedness_score=job.config.get("min_groundedness_score"),
+            min_overall_score=job.config.get("min_overall_score"),
         )
         generate_eval = bool(job.config.get("generate_eval", True))
         selection_dir = job.config.get("selection_dir")

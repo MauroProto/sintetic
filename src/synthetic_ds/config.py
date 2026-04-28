@@ -73,12 +73,17 @@ class ParsingConfig(BaseModel):
     render_page_images: bool = True
     page_image_dpi: int = 144
     multimodal_max_pages_per_chunk: int = 2
+    docling_max_pages: int | None = 100
+    docling_max_ram_mb: int | None = 3072
+    docling_streaming: bool = True
+    oom_cooldown_chunks: int = 5
 
 
 class ChunkingConfig(BaseModel):
     strategy: str = "semantic"
     target_tokens: int = 8192
     overlap: int = 200
+    max_pages_per_chunk: int | None = 25
 
 
 class GenerationConfig(BaseModel):
@@ -116,7 +121,7 @@ class GenerationConfig(BaseModel):
         )
 
 
-_FILTER_PRESETS: dict[str, tuple[float, float]] = {
+FILTER_PRESETS: dict[str, tuple[float, float]] = {
     "strict": (0.85, 0.85),
     "balanced": (0.70, 0.70),
     "permissive": (0.55, 0.55),
@@ -132,18 +137,50 @@ class FiltersConfig(BaseModel):
     """
 
     preset: str = "balanced"
-    groundedness_threshold: float = 0.7
-    overall_threshold: float = 0.7
+    groundedness_threshold: float | None = None
+    overall_threshold: float | None = None
 
     @property
     def effective_groundedness(self) -> float:
-        preset_values = _FILTER_PRESETS.get(self.preset, _FILTER_PRESETS["balanced"])
+        preset_values = FILTER_PRESETS.get(self.preset, FILTER_PRESETS["balanced"])
         return self.groundedness_threshold if self.groundedness_threshold is not None else preset_values[0]
 
     @property
     def effective_overall(self) -> float:
-        preset_values = _FILTER_PRESETS.get(self.preset, _FILTER_PRESETS["balanced"])
+        preset_values = FILTER_PRESETS.get(self.preset, FILTER_PRESETS["balanced"])
         return self.overall_threshold if self.overall_threshold is not None else preset_values[1]
+
+
+def _validate_quality_score(name: str, value: float | None) -> float | None:
+    if value is None:
+        return None
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{name} must be between 0 and 1")
+    return float(value)
+
+
+def apply_quality_overrides(
+    config: "ProjectConfig",
+    *,
+    quality_preset: str | None = None,
+    min_groundedness_score: float | None = None,
+    min_overall_score: float | None = None,
+) -> "ProjectConfig":
+    """Return a config copy with agent-supplied quality gates applied."""
+    updated = config.model_copy(deep=True)
+    if quality_preset is not None:
+        if quality_preset not in FILTER_PRESETS:
+            raise ValueError(f"Unknown quality preset '{quality_preset}'")
+        updated.filters.preset = quality_preset
+        updated.filters.groundedness_threshold = None
+        updated.filters.overall_threshold = None
+    groundedness = _validate_quality_score("min_groundedness_score", min_groundedness_score)
+    overall = _validate_quality_score("min_overall_score", min_overall_score)
+    if groundedness is not None:
+        updated.filters.groundedness_threshold = groundedness
+    if overall is not None:
+        updated.filters.overall_threshold = overall
+    return updated
 
 
 class ReviewConfig(BaseModel):
@@ -152,6 +189,7 @@ class ReviewConfig(BaseModel):
 
 class ExportConfig(BaseModel):
     require_eval_split: bool = True
+    allow_partial_export: bool = False
 
 
 class ProjectConfig(BaseModel):

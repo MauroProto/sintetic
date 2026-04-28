@@ -28,9 +28,12 @@ from synthetic_ds.models import (
 from synthetic_ds.reporting import build_report_markdown
 from synthetic_ds.splitter import split_documents
 from synthetic_ds.storage import (
+    PHASES,
     append_jsonl,
+    detect_completed_phases,
     read_json,
     read_jsonl,
+    save_phase_checkpoint,
     write_csv_rows,
     write_json,
     write_jsonl,
@@ -61,6 +64,17 @@ class PipelineSession:
         self.judged_dir = self.paths.artifacts_dir / "judged"
         self.judged_dir.mkdir(parents=True, exist_ok=True)
         self._stats = self._load_progress()
+
+    def completed_phases(self) -> list[str]:
+        return detect_completed_phases(self.paths.artifacts_dir)
+
+    def save_checkpoint(self, phase: str, *, output_files: Iterable[Path | str] = (), stats: dict | None = None) -> None:
+        save_phase_checkpoint(
+            self.paths.artifacts_dir,
+            phase,
+            output_files=output_files,
+            stats=stats or self.stats_snapshot(),
+        )
 
     def _load_progress(self) -> dict[str, Any]:
         payload = read_json(self.progress_path)
@@ -105,7 +119,7 @@ class PipelineSession:
         if self.control_callback:
             self.control_callback()
 
-    def ingest(self, *, pdf_dir: Path, recursive: bool = True) -> tuple[int, int]:
+    def ingest(self, *, pdf_dir: Path, recursive: bool = True, max_documents: int | None = None) -> tuple[int, int]:
         if self.paths.documents_path.exists() and self.paths.chunks_path.exists():
             documents = read_jsonl(self.paths.documents_path, DocumentRecord)
             chunks = read_jsonl(self.paths.chunks_path, ChunkRecord)
@@ -113,6 +127,11 @@ class PipelineSession:
                 document_count=len(documents),
                 chunk_count=len(chunks),
                 total_pages=sum(int(doc.metadata.get("page_count", 0)) for doc in documents),
+            )
+            self.save_checkpoint(
+                "ingest",
+                output_files=[self.paths.documents_path, self.paths.chunks_path],
+                stats={"documents": len(documents), "chunks": len(chunks)},
             )
             return len(documents), len(chunks)
 
@@ -130,6 +149,10 @@ class PipelineSession:
             ocr_text_min_chars=self.config.parsing.ocr_text_min_chars,
             render_page_images=self.config.parsing.render_page_images,
             page_image_dpi=self.config.parsing.page_image_dpi,
+            max_pages_per_chunk=self.config.chunking.max_pages_per_chunk,
+            max_documents=max_documents,
+            docling_max_pages=self.config.parsing.docling_max_pages,
+            docling_max_ram_mb=self.config.parsing.docling_max_ram_mb,
         )
         write_jsonl(result.documents, self.paths.documents_path)
         write_jsonl(result.chunks, self.paths.chunks_path)
@@ -138,6 +161,11 @@ class PipelineSession:
             chunk_count=len(result.chunks),
             total_pages=sum(int(doc.metadata.get("page_count", 0)) for doc in result.documents),
         )
+        self.save_checkpoint(
+            "ingest",
+            output_files=[self.paths.documents_path, self.paths.chunks_path],
+            stats={"documents": len(result.documents), "chunks": len(result.chunks)},
+        )
         return len(result.documents), len(result.chunks)
 
     def split(self) -> SplitManifest:
@@ -145,11 +173,29 @@ class PipelineSession:
         if payload:
             manifest = SplitManifest.model_validate(payload)
             self._update_stats(dataset_mode=manifest.dataset_mode, clean_eval=manifest.has_clean_eval)
+            self.save_checkpoint(
+                "split",
+                output_files=[self.paths.split_path],
+                stats={
+                    "train_docs": len(manifest.train_doc_ids),
+                    "eval_docs": len(manifest.eval_doc_ids),
+                    "dataset_mode": str(manifest.dataset_mode),
+                },
+            )
             return manifest
         documents = read_jsonl(self.paths.documents_path, DocumentRecord)
         manifest = split_documents(documents)
         write_json(manifest.model_dump(mode="json"), self.paths.split_path)
         self._update_stats(dataset_mode=manifest.dataset_mode, clean_eval=manifest.has_clean_eval)
+        self.save_checkpoint(
+            "split",
+            output_files=[self.paths.split_path],
+            stats={
+                "train_docs": len(manifest.train_doc_ids),
+                "eval_docs": len(manifest.eval_doc_ids),
+                "dataset_mode": str(manifest.dataset_mode),
+            },
+        )
         return manifest
 
     def _select_chunks(
@@ -216,6 +262,11 @@ class PipelineSession:
         if not pending_targets:
             if not generated_path.exists():
                 write_jsonl(existing, generated_path)
+            self.save_checkpoint(
+                f"generate_{split_name}",
+                output_files=[generated_path],
+                stats={"examples_generated": len(existing)},
+            )
             return len(existing)
 
         chunk_map = {chunk.chunk_id: chunk for chunk in selected_chunks}
@@ -264,7 +315,13 @@ class PipelineSession:
                 on_result=on_result,
             )
         )
-        return len(read_jsonl(generated_path, GeneratedExample))
+        total_generated = len(read_jsonl(generated_path, GeneratedExample))
+        self.save_checkpoint(
+            f"generate_{split_name}",
+            output_files=[generated_path],
+            stats={"examples_generated": total_generated},
+        )
+        return total_generated
 
     def curate_split(self, split_name: str) -> CuratedSummary:
         if self.backend is None:
@@ -277,6 +334,14 @@ class PipelineSession:
             write_jsonl([], self.paths.curated_dir / f"{split_name}.jsonl")
             write_jsonl([], self.paths.curated_dir / f"{split_name}-rejected.jsonl")
             write_json(summary.model_dump(mode="json"), self.paths.curated_dir / f"{split_name}-summary.json")
+            self.save_checkpoint(
+                f"judge_{split_name}",
+                output_files=[
+                    self.paths.curated_dir / f"{split_name}.jsonl",
+                    self.paths.curated_dir / f"{split_name}-summary.json",
+                ],
+                stats=summary.model_dump(mode="json"),
+            )
             return summary
 
         judged_path = self.judged_dir / f"{split_name}.jsonl"
@@ -337,6 +402,15 @@ class PipelineSession:
         self._stats["accepted"][split_name] = curated.summary.accepted
         self._stats["rejected"][split_name] = curated.summary.rejected
         self._persist_progress()
+        self.save_checkpoint(
+            f"judge_{split_name}",
+            output_files=[
+                judged_path,
+                self.paths.curated_dir / f"{split_name}.jsonl",
+                self.paths.curated_dir / f"{split_name}-summary.json",
+            ],
+            stats=curated.summary.model_dump(mode="json"),
+        )
         return curated.summary
 
     def export(self) -> tuple[int, int, int]:
@@ -348,6 +422,7 @@ class PipelineSession:
             eval_examples=eval_items,
             manifest=manifest,
             require_eval=self.config.export.require_eval_split,
+            allow_partial=self.config.export.allow_partial_export,
         )
         system_prompt = (
             "Sos un asistente experto. Responde solo usando la informacion del documento provisto. "
@@ -370,6 +445,16 @@ class PipelineSession:
             review_items.extend(build_review_items(eval_items, split="eval", sample_size=remainder))
         write_jsonl(review_items, self.paths.exports_dir / "review_sample.jsonl")
         write_csv_rows([item.model_dump(mode="json") for item in review_items], self.paths.exports_dir / "review_sample.csv")
+        self.save_checkpoint(
+            "export",
+            output_files=[
+                self.paths.exports_dir / "train.jsonl",
+                self.paths.exports_dir / "eval.jsonl",
+                self.paths.exports_dir / "review_sample.jsonl",
+                self.paths.exports_dir / "review_sample.csv",
+            ],
+            stats={"train": len(train_records), "eval": len(eval_records), "review": len(review_items)},
+        )
         return len(train_records), len(eval_records), len(review_items)
 
     def report(self) -> tuple[Path, str]:
@@ -394,4 +479,5 @@ class PipelineSession:
         )
         report_path = self.paths.reports_dir / "latest.md"
         report_path.write_text(markdown, encoding="utf-8")
+        self.save_checkpoint("report", output_files=[report_path], stats={"report": str(report_path)})
         return report_path, markdown
