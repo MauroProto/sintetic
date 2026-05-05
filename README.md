@@ -31,11 +31,15 @@ Output goes to `./pdfs/extraccion_dataset/`.
 
 ## How it works
 
-1. **Parse** PDFs (Docling + PyMuPDF + OCR fallback).
-2. **Chunk** by semantic structure (~8K tokens per chapter).
-3. **Generate** Q&A — extractive, inferential, unanswerable, multi-chunk, format-specific.
-4. **Judge** every example (relevance, groundedness, format, difficulty).
-5. **Export** filtered `train.jsonl` + `eval.jsonl` + audit sample.
+```mermaid
+flowchart LR
+    A[PDFs] --> B[ingest<br/>Docling / PyMuPDF + OCR]
+    B --> C[chunk<br/>semantic ~8K tokens]
+    C --> D[split<br/>train / eval]
+    D --> E[generate<br/>5 Q&A types]
+    E --> F[judge<br/>relevance · groundedness<br/>format · difficulty]
+    F --> G[export<br/>train.jsonl + eval.jsonl<br/>+ review sample]
+```
 
 Each phase checkpoints to disk. If a run dies, `--resume` picks up where it left off.
 
