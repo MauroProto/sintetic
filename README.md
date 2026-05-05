@@ -2,7 +2,7 @@
 
 # synthetic-ds
 
-**Generador local de datasets sintéticos Q&A desde PDFs, con chunking semántico inteligente y soporte para múltiples proveedores OpenAI-compatibles.**
+**Local-first synthetic Q&A dataset generator from PDFs — semantic chunking, LLM judging, multi-provider support.**
 
 [![Version](https://img.shields.io/badge/version-0.1.0-1f6feb?style=flat-square)](pyproject.toml)
 [![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
@@ -18,159 +18,159 @@
 
 ---
 
-`synthetic-ds` toma una carpeta de PDFs y produce un corpus listo para fine-tuning o evaluación: `train.jsonl` + `eval.jsonl` + un `review_sample` curado por un *judge* LLM. Todo corre **local**, las claves nunca salen de tu máquina, y la pipeline es **reanudable por fases** con checkpoints durables.
+`synthetic-ds` takes a folder of PDFs and produces a corpus ready for fine-tuning or evaluation: `train.jsonl` + `eval.jsonl` + a `review_sample` curated by an LLM *judge*. Everything runs **locally**, your API keys never leave your machine, and the pipeline is **resumable phase-by-phase** with durable checkpoints.
 
-Para automatización con agentes externos (OpenClawd, Hermes, etc.), ver **[AGENTS.md](AGENTS.md)**.
+For automation by external agents (OpenClawd, Hermes, etc.), see **[AGENTS.md](AGENTS.md)**.
 
 ---
 
-## Tabla de contenidos
+## Table of contents
 
-- [¿Por qué synthetic-ds?](#por-qué-synthetic-ds)
-- [Características](#características)
-- [Stack tecnológico](#stack-tecnológico)
-- [Requisitos](#requisitos)
-- [Instalación](#instalación)
-- [Inicio rápido](#inicio-rápido)
-- [Arquitectura del pipeline](#arquitectura-del-pipeline)
-- [Chunking semántico inteligente](#chunking-semántico-inteligente)
-- [Modos del dataset](#modos-del-dataset)
-- [Tipos de preguntas generadas](#tipos-de-preguntas-generadas)
-- [Referencia de CLI](#referencia-de-cli)
-- [Configuración (`synthetic-ds.yaml`)](#configuración-synthetic-dsyaml)
-- [Proveedores soportados](#proveedores-soportados)
-- [App visual local](#app-visual-local)
-- [Modo agente (no interactivo)](#modo-agente-no-interactivo)
-- [Reanudación y checkpoints](#reanudación-y-checkpoints)
-- [Calidad y judging](#calidad-y-judging)
-- [Contrato de salida](#contrato-de-salida)
-- [Seguridad de claves](#seguridad-de-claves)
-- [Desarrollo](#desarrollo)
-- [Estructura del repositorio](#estructura-del-repositorio)
+- [Why synthetic-ds?](#why-synthetic-ds)
+- [Features](#features)
+- [Tech stack](#tech-stack)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Pipeline architecture](#pipeline-architecture)
+- [Smart semantic chunking](#smart-semantic-chunking)
+- [Dataset modes](#dataset-modes)
+- [Question types](#question-types)
+- [CLI reference](#cli-reference)
+- [Configuration (`synthetic-ds.yaml`)](#configuration-synthetic-dsyaml)
+- [Supported providers](#supported-providers)
+- [Local web app](#local-web-app)
+- [Agent mode (non-interactive)](#agent-mode-non-interactive)
+- [Resume and checkpoints](#resume-and-checkpoints)
+- [Quality and judging](#quality-and-judging)
+- [Output contract](#output-contract)
+- [API key security](#api-key-security)
+- [Development](#development)
+- [Repository layout](#repository-layout)
 - [Tests](#tests)
 - [Roadmap](#roadmap)
-- [Licencia](#licencia)
+- [License](#license)
 
 ---
 
-## ¿Por qué synthetic-ds?
+## Why synthetic-ds?
 
-Crear un dataset Q&A de calidad para fine-tuning suele requerir un pipeline frágil hecho a mano: parsear PDFs, cortarlos a la mitad, llamar a un modelo, validar respuestas, exportar JSONL. `synthetic-ds` empaqueta ese pipeline con decisiones opinionadas:
+Building a high-quality Q&A dataset for fine-tuning usually means stitching together a fragile pipeline by hand: parse PDFs, slice them, call a model, validate answers, export JSONL. `synthetic-ds` packages that pipeline with opinionated defaults:
 
-- **Local-first.** Nada de SaaS opaco: tus PDFs, tu corpus, tu cuenta del provider.
-- **Chunks semánticos.** Detecta capítulos/secciones automáticamente y genera contexto rico (hasta 8K tokens por chunk) en lugar de cortar por cantidad fija de tokens.
-- **Judging integrado.** Un LLM puntúa cada ejemplo (relevancia, *groundedness*, formato, dificultad, overall) y filtra por umbrales configurables.
-- **Reanudable.** Si se cae la corrida en la fase 5/8, retomá desde el último checkpoint sin re-procesar lo anterior.
-- **Multi-proveedor.** Cualquier endpoint OpenAI-compatible: Fireworks, OpenAI, Z.AI, Groq, OpenRouter, xAI. Cambiar de proveedor es una sola línea.
-- **Apto para agentes.** Comandos JSON-only, jobs durables, *doctor* de diagnóstico, defaults conservadores con `--agent`.
+- **Local-first.** No opaque SaaS — your PDFs, your corpus, your provider account.
+- **Semantic chunks.** Auto-detects chapters/sections and produces context-rich chunks (up to ~8K tokens) instead of fixed-size token cuts.
+- **Built-in judging.** An LLM scores every example (relevance, groundedness, format, difficulty, overall) and filters by configurable thresholds.
+- **Resumable.** If a run dies in phase 5/8, `--resume` picks up from the last checkpoint without re-processing earlier work.
+- **Multi-provider.** Any OpenAI-compatible endpoint: Fireworks, OpenAI, Z.AI, Groq, OpenRouter, xAI. Switching providers is one line.
+- **Agent-friendly.** JSON-only commands, durable jobs, a `doctor` health check, conservative defaults via `--agent`.
 
 ---
 
-## Características
+## Features
 
-| Bloque | Detalle |
+| Block | Detail |
 |---|---|
-| **Parsing** | Docling (primario, layout-aware) + PyMuPDF (fallback) + OCR vía Tesseract para PDFs escaneados. Detección automática de idioma, *math markers*, captura de páginas con contenido visual. |
-| **Chunking** | Estrategia **semántica** (default): detecta jerarquía (capítulos/secciones/subsecciones) y arma chunks de ~8K tokens respetando estructura. Fallback `headings_first` para retrocompatibilidad. |
-| **Generación** | 5 tipos de preguntas (extractiva, inferencial, *unanswerable*, multi-chunk, *format-specific*) con mezcla configurable. Resumen del documento + contexto previo/siguiente en cada prompt. |
-| **Judging** | Score 0–1 en relevance / groundedness / format / difficulty / overall. Presets `strict` / `balanced` / `permissive` o umbrales custom. |
-| **Exports** | `train.jsonl` (chat-format), `eval.jsonl` limpio por `doc_id`, `review_sample.jsonl` + `.csv` para auditoría humana, reporte `latest.md`. |
-| **Job runner** | Submit detached, status, events, wait, pause, resume, cancel. Estado persistido en SQLite local (`~/.synthetic-ds/app.db`). |
-| **Web UI** | React 18 + Vite + Tailwind + shadcn/ui. Server-Sent Events para progreso en vivo, dark mode persistente, editor Monaco para YAML. |
-| **Multi-idioma** | Prompts en inglés con `language` forzado: 17 idiomas soportados (es/en/pt/fr/de/it/ca/nl/pl/ru/ja/ko/zh-cn/zh-tw/ar/hi/tr). |
-| **Resiliencia** | Circuit breaker, OOM cooldown, *retries* con backoff vía Tenacity, checkpoints por fase. |
+| **Parsing** | Docling (primary, layout-aware) + PyMuPDF (fallback) + Tesseract OCR for scanned PDFs. Automatic language detection, math markers, image capture for visually rich pages. |
+| **Chunking** | **Semantic** strategy by default: detects hierarchy (chapters / sections / subsections) and packs ~8K-token chunks that respect document structure. `headings_first` fallback for back-compat. |
+| **Generation** | 5 question types (extractive, inferential, *unanswerable*, multi-chunk, format-specific) with a configurable mix. Each prompt includes a document summary plus previous/next-section context. |
+| **Judging** | 0–1 scores for relevance / groundedness / format / difficulty / overall. Presets `strict` / `balanced` / `permissive` or custom thresholds. |
+| **Exports** | `train.jsonl` (chat-format), `eval.jsonl` clean by `doc_id`, `review_sample.jsonl` + `.csv` for human audit, `latest.md` report. |
+| **Job runner** | Detached submit, status, events, wait, pause, resume, cancel. State persisted to local SQLite (`~/.synthetic-ds/app.db`). |
+| **Web UI** | React 18 + Vite + Tailwind + shadcn/ui. Server-Sent Events for live progress, persistent dark mode, embedded Monaco editor for YAML. |
+| **Multi-language** | English-language prompts with forced output `language`: 17 languages supported (es/en/pt/fr/de/it/ca/nl/pl/ru/ja/ko/zh-cn/zh-tw/ar/hi/tr). |
+| **Resilience** | Circuit breaker, OOM cooldown, retries with backoff via Tenacity, per-phase checkpoints. |
 
 ---
 
-## Stack tecnológico
+## Tech stack
 
 ### Backend (Python ≥ 3.12)
 
-| Paquete | Versión | Rol |
+| Package | Version | Role |
 |---|---|---|
-| [`fastapi`](https://github.com/tiangolo/fastapi) | `≥ 0.115.0` | API HTTP de la app local |
+| [`fastapi`](https://github.com/tiangolo/fastapi) | `≥ 0.115.0` | HTTP API for the local app |
 | [`uvicorn`](https://github.com/encode/uvicorn) | `≥ 0.30.6` | ASGI server |
-| [`typer`](https://github.com/tiangolo/typer) | `≥ 0.12.5` | CLI declarativo |
-| [`pydantic`](https://github.com/pydantic/pydantic) | `≥ 2.9.0` | Modelos y validación |
-| [`openai`](https://github.com/openai/openai-python) | `≥ 1.99.0` | SDK OpenAI-compatible para todos los providers |
-| [`pymupdf`](https://github.com/pymupdf/PyMuPDF) | `≥ 1.24.10` | Parser PDF rápido (fallback / `--parser-mode fast`) |
-| [`docling`](https://github.com/DS4SD/docling) *(opcional)* | `≥ 2.45.0` | Parser PDF layout-aware (extra `parse`) |
-| [`sentence-transformers`](https://github.com/UKPLab/sentence-transformers) *(opcional)* | `≥ 3.0.1` | Embeddings semánticos (extra `semantic`) |
-| [`scikit-learn`](https://scikit-learn.org/) *(opcional)* | `≥ 1.5.1` | Clustering para chunking semántico |
-| [`tiktoken`](https://github.com/openai/tiktoken) | `≥ 0.12.0` | Tokenización compatible con OpenAI |
-| [`langdetect`](https://github.com/Mimino666/langdetect) | `≥ 1.0.9` | Detección automática de idioma |
-| [`tenacity`](https://github.com/jd/tenacity) | `≥ 9.0.0` | Retries con backoff |
-| [`keyring`](https://github.com/jaraco/keyring) | `≥ 25.6.0` | Almacenaje seguro de API keys |
-| [`pyyaml`](https://github.com/yaml/pyyaml) | `≥ 6.0.2` | Config YAML |
-| [`pillow`](https://python-pillow.org/) | `≥ 12.2.0` | Render de páginas para multimodal |
+| [`typer`](https://github.com/tiangolo/typer) | `≥ 0.12.5` | Declarative CLI |
+| [`pydantic`](https://github.com/pydantic/pydantic) | `≥ 2.9.0` | Models and validation |
+| [`openai`](https://github.com/openai/openai-python) | `≥ 1.99.0` | OpenAI-compatible SDK used for every provider |
+| [`pymupdf`](https://github.com/pymupdf/PyMuPDF) | `≥ 1.24.10` | Fast PDF parser (fallback / `--parser-mode fast`) |
+| [`docling`](https://github.com/DS4SD/docling) *(optional)* | `≥ 2.45.0` | Layout-aware PDF parser (extra `parse`) |
+| [`sentence-transformers`](https://github.com/UKPLab/sentence-transformers) *(optional)* | `≥ 3.0.1` | Semantic embeddings (extra `semantic`) |
+| [`scikit-learn`](https://scikit-learn.org/) *(optional)* | `≥ 1.5.1` | Clustering for semantic chunking |
+| [`tiktoken`](https://github.com/openai/tiktoken) | `≥ 0.12.0` | OpenAI-compatible tokenizer |
+| [`langdetect`](https://github.com/Mimino666/langdetect) | `≥ 1.0.9` | Automatic language detection |
+| [`tenacity`](https://github.com/jd/tenacity) | `≥ 9.0.0` | Retries with backoff |
+| [`keyring`](https://github.com/jaraco/keyring) | `≥ 25.6.0` | Secure API-key storage |
+| [`pyyaml`](https://github.com/yaml/pyyaml) | `≥ 6.0.2` | YAML config |
+| [`pillow`](https://python-pillow.org/) | `≥ 12.2.0` | Page rendering for multimodal |
 
 ### Frontend (Node ≥ 18, pnpm)
 
-| Paquete | Versión | Rol |
+| Package | Version | Role |
 |---|---|---|
 | [`react`](https://react.dev/) | `18.3.1` | UI |
-| [`typescript`](https://www.typescriptlang.org/) | `5.5.4` | Tipos |
+| [`typescript`](https://www.typescriptlang.org/) | `5.5.4` | Types |
 | [`vite`](https://vitejs.dev/) | `5.4.6` | Build / dev server |
-| [`tailwindcss`](https://tailwindcss.com/) | `3.4.13` | Estilos utility-first |
-| [`@radix-ui/*`](https://www.radix-ui.com/) | `1.x` | Primitives accesibles (shadcn/ui) |
-| [`@tanstack/react-query`](https://tanstack.com/query) | `5.56.0` | Data fetching y cache |
-| [`zustand`](https://github.com/pmndrs/zustand) | `4.5.5` | Estado global |
-| [`framer-motion`](https://www.framer.com/motion/) | `11.5.4` | Animaciones |
-| [`recharts`](https://recharts.org/) | `2.12.7` | Charts de métricas |
-| [`@monaco-editor/react`](https://github.com/suren-atoyan/monaco-react) | `4.6.0` | Editor YAML embebido |
-| [`react-router-dom`](https://reactrouter.com/) | `6.26.2` | Routing SPA |
-| [`lucide-react`](https://lucide.dev/) | `0.445.0` | Iconos |
+| [`tailwindcss`](https://tailwindcss.com/) | `3.4.13` | Utility-first CSS |
+| [`@radix-ui/*`](https://www.radix-ui.com/) | `1.x` | Accessible primitives (shadcn/ui) |
+| [`@tanstack/react-query`](https://tanstack.com/query) | `5.56.0` | Data fetching & cache |
+| [`zustand`](https://github.com/pmndrs/zustand) | `4.5.5` | Global state |
+| [`framer-motion`](https://www.framer.com/motion/) | `11.5.4` | Animations |
+| [`recharts`](https://recharts.org/) | `2.12.7` | Metrics charts |
+| [`@monaco-editor/react`](https://github.com/suren-atoyan/monaco-react) | `4.6.0` | Embedded YAML editor |
+| [`react-router-dom`](https://reactrouter.com/) | `6.26.2` | SPA routing |
+| [`lucide-react`](https://lucide.dev/) | `0.445.0` | Icons |
 
 ### Tooling
 
-- [`uv`](https://docs.astral.sh/uv/) — gestor de dependencias y entornos Python.
-- [`pnpm`](https://pnpm.io/) — gestor del frontend.
+- [`uv`](https://docs.astral.sh/uv/) — Python dependency / environment manager.
+- [`pnpm`](https://pnpm.io/) — Frontend package manager.
 - [`pytest`](https://docs.pytest.org/) `≥ 8.3.2` — tests.
-- [`tesseract`](https://github.com/tesseract-ocr/tesseract) — OCR (binario del sistema, opcional).
+- [`tesseract`](https://github.com/tesseract-ocr/tesseract) — OCR (system binary, optional).
 
 ---
 
-## Requisitos
+## Requirements
 
-| Requisito | Versión mínima | Notas |
+| Requirement | Min version | Notes |
 |---|---|---|
-| Python | `3.12` | Tipado moderno (PEP 695, `StrEnum`, etc.) |
-| `uv` | última estable | `pip install uv` o `brew install uv` |
-| Node.js | `18 LTS` | Solo si vas a usar la app web o desarrollar el frontend |
-| `pnpm` | `9.x` | Idem |
-| Tesseract | `5.x` *(opcional)* | Necesario solo para OCR de PDFs escaneados |
-| API key | — | De cualquier proveedor OpenAI-compatible (ver [Proveedores](#proveedores-soportados)) |
+| Python | `3.12` | Modern typing (PEP 695, `StrEnum`, etc.) |
+| `uv` | latest stable | `pip install uv` or `brew install uv` |
+| Node.js | `18 LTS` | Only needed for the web app or frontend dev |
+| `pnpm` | `9.x` | Same |
+| Tesseract | `5.x` *(optional)* | Required only for OCR on scanned PDFs |
+| API key | — | From any OpenAI-compatible provider (see [Providers](#supported-providers)) |
 
-Tesseract en macOS:
+Tesseract on macOS:
 ```bash
 brew install tesseract tesseract-lang
 ```
 
-Tesseract en Debian/Ubuntu:
+Tesseract on Debian/Ubuntu:
 ```bash
 sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-spa
 ```
 
 ---
 
-## Instalación
+## Installation
 
 ```bash
-# Clonar
+# Clone
 git clone https://github.com/MauroProto/sintetic.git
 cd sintetic
 
-# Sync con todos los extras (parser completo + chunking semántico + tests)
+# Sync with all extras (full parser + semantic chunking + tests)
 uv sync --extra parse --extra semantic --extra dev
 
-# (Opcional) Build del frontend para usar la app web
+# (Optional) Build the frontend if you plan to use the web app
 cd src/synthetic_ds/web/frontend
 pnpm install
 pnpm build
 cd -
 ```
 
-Para una instalación mínima (solo CLI con PyMuPDF, sin Docling ni embeddings):
+Minimal install (CLI only with PyMuPDF, no Docling, no embeddings):
 
 ```bash
 uv sync
@@ -178,24 +178,24 @@ uv sync
 
 ---
 
-## Inicio rápido
+## Quick start
 
 ```bash
-# 1. Inicializar el proyecto en el directorio actual
+# 1. Initialize the project in the current directory
 uv run synthetic-ds init --project-dir .
 
-# 2. Elegir y configurar el proveedor
+# 2. Pick and configure the provider
 uv run synthetic-ds provider use fireworks
-uv run synthetic-ds provider set-key fireworks   # se guarda en keychain del sistema
+uv run synthetic-ds provider set-key fireworks   # stored in the system keychain
 
-# 3. Diagnóstico previo (opcional pero recomendado)
+# 3. Pre-flight diagnosis (optional but recommended)
 uv run synthetic-ds doctor --project-dir .
 
-# 4. Generar el dataset desde una carpeta de PDFs
+# 4. Generate the dataset from a folder of PDFs
 uv run synthetic-ds run ./pdfs --resource-profile low
 ```
 
-Salida esperada (estructura, ver [Contrato de salida](#contrato-de-salida)):
+Expected output (see [Output contract](#output-contract)):
 
 ```text
 ./pdfs/extraccion_dataset/
@@ -204,31 +204,31 @@ Salida esperada (estructura, ver [Contrato de salida](#contrato-de-salida)):
 ├── review_sample.jsonl
 ├── review_sample.csv
 ├── latest.md
-└── .work/                # Estado interno reanudable (no editar)
+└── .work/                # Internal resumable state (do not edit)
 ```
 
 ---
 
-## Arquitectura del pipeline
+## Pipeline architecture
 
 ```mermaid
 flowchart TD
-    A[Carpeta de PDFs] --> B[ingest<br/>Docling / PyMuPDF + OCR]
-    B --> C[chunking<br/>Detección de capítulos<br/>~8K tokens / chunk]
+    A[PDF folder] --> B[ingest<br/>Docling / PyMuPDF + OCR]
+    B --> C[chunking<br/>Chapter detection<br/>~8K tokens / chunk]
     C --> D[split<br/>train_doc_ids / eval_doc_ids]
-    D --> E[generate train<br/>5 tipos de Q&A]
-    D --> F[generate eval<br/>doc-level limpio]
+    D --> E[generate train<br/>5 Q&A types]
+    D --> F[generate eval<br/>doc-level clean]
     E --> G[judge train<br/>relevance / groundedness / format / difficulty]
     F --> H[judge eval]
-    G --> I[curate<br/>filtrar por umbrales]
+    G --> I[curate<br/>filter by thresholds]
     H --> I
     I --> J[export<br/>train.jsonl + eval.jsonl + review_sample]
-    J --> K[report<br/>latest.md con métricas]
+    J --> K[report<br/>latest.md with metrics]
 ```
 
-Cada flecha es una **fase** con checkpoint persistente en `.work/checkpoints/`. Si la corrida falla, `--resume` retoma desde la primera fase pendiente.
+Every arrow is a **phase** with a persistent checkpoint in `.work/checkpoints/`. If the run fails, `--resume` picks up from the first pending phase.
 
-Fases canónicas (en orden):
+Canonical phase order:
 
 ```
 ingest → split → generate_train → judge_train → generate_eval → judge_eval → export → report
@@ -236,130 +236,130 @@ ingest → split → generate_train → judge_train → generate_eval → judge_
 
 ---
 
-## Chunking semántico inteligente
+## Smart semantic chunking
 
-El sistema detecta **automáticamente** la estructura jerárquica del documento (capítulos, secciones, subsecciones) y arma chunks de ~8K–12K tokens que coinciden con unidades narrativas reales, en lugar de cortar a la mitad de un párrafo cada N tokens.
+The system **automatically** detects the document's hierarchical structure (chapters, sections, subsections) and builds chunks of ~8K–12K tokens that match real narrative units, instead of slicing through paragraphs every N tokens.
 
-### Configuración
+### Configuration
 
 ```yaml
 # synthetic-ds.yaml
 chunking:
-  strategy: semantic          # "semantic" (recomendado) o "headings_first" (legacy)
-  target_tokens: 8192         # ~capítulo completo
-  overlap: 200                # Tokens de overlap entre chunks consecutivos
-  max_pages_per_chunk: 25     # Guardia para PDFs/libros con poco texto por página
+  strategy: semantic          # "semantic" (recommended) or "headings_first" (legacy)
+  target_tokens: 8192         # ~one full chapter
+  overlap: 200                # Tokens of overlap between consecutive chunks
+  max_pages_per_chunk: 25     # Guardrail for sparse PDFs / books with thin pages
 ```
 
-### Antes vs ahora
+### Before vs now
 
-| Característica | Antes (`headings_first`) | Ahora (`semantic`) |
+| Aspect | Before (`headings_first`) | Now (`semantic`) |
 |---|---|---|
-| Tamaño de chunk | 512 tokens (~1 página) | 8 192 tokens (~10–15 páginas) |
-| Estrategia | Tokens fijos | Estructura semántica |
-| Detección de capítulos | Solo secciones existentes | Automática con regex jerárquica |
-| Contexto para *unanswerable* | Solo un fragmento | Documento completo |
-| Overlap | 50 tokens | 200 tokens + resumen previo |
+| Chunk size | 512 tokens (~1 page) | 8 192 tokens (~10–15 pages) |
+| Strategy | Fixed token count | Semantic structure |
+| Chapter detection | Existing sections only | Auto-detected via hierarchical regex |
+| Context for *unanswerable* | Single fragment | Full document |
+| Overlap | 50 tokens | 200 tokens + previous summary |
 
-### Esquema mental
+### Mental model
 
 ```
-PDF (100 páginas)
-   ↓ Detección automática
-   ├── Capítulo 1: pp 1–25
-   ├── Capítulo 2: pp 26–50
+PDF (100 pages)
+   ↓ Auto-detection
+   ├── Chapter 1: pp 1–25
+   ├── Chapter 2: pp 26–50
    └── …
    ↓
-Chunks semánticos (~8K tokens cada uno)
+Semantic chunks (~8K tokens each)
    ↓
-Cada llamada al LLM recibe:
-  ├── DOCUMENT OVERVIEW (resumen global)
-  ├── PREVIOUS CONTEXT (continuidad)
-  └── CURRENT CHUNK (capítulo / sección completa)
+Each LLM call receives:
+  ├── DOCUMENT OVERVIEW (global summary)
+  ├── PREVIOUS CONTEXT (continuity)
+  └── CURRENT CHUNK (full chapter / section)
 ```
 
-Implementación: `src/synthetic_ds/semantic_chunking.py`.
+Implementation: `src/synthetic_ds/semantic_chunking.py`.
 
 ---
 
-## Modos del dataset
+## Dataset modes
 
-`synthetic-ds` detecta automáticamente el modo según la cantidad de PDFs:
+`synthetic-ds` automatically infers the mode based on PDF count:
 
-| Modo | Trigger | Salida |
+| Mode | Trigger | Output |
 |---|---|---|
-| **single_document** | 1 solo PDF | `train.jsonl` + `review_sample`. **Sin** eval limpio (no hay forma de hacer hold-out por documento). |
-| **multi_document** | 2 o más PDFs | `train.jsonl` + `eval.jsonl` con split limpio por `doc_id` + `review_sample`. |
+| **single_document** | 1 PDF | `train.jsonl` + `review_sample`. **No** clean eval (you can't hold out a full document). |
+| **multi_document** | 2+ PDFs | `train.jsonl` + `eval.jsonl` clean-split by `doc_id` + `review_sample`. |
 
-El modo se congela en `split.json` y se respeta en `--resume`. Los flags legacy `--generate-eval true/false` se ignoran cuando contradicen el modo detectado.
+The mode is frozen in `split.json` and respected by `--resume`. Legacy `--generate-eval true/false` flags are ignored when they contradict the inferred mode.
 
 ---
 
-## Tipos de preguntas generadas
+## Question types
 
-| Tipo | Descripción | Mezcla default |
+| Type | Description | Default mix |
 |---|---|---|
-| `extractive` | Respuesta literal (span) presente en el chunk | `35%` |
-| `inferential` | Una sola inferencia sobre hechos del chunk | `25%` |
-| `unanswerable` | Pregunta plausible cuya respuesta **no** está en el documento. Usada para entrenar refusal grounded. | `20%` |
-| `multi_chunk` | Requiere combinar info de ≥ 2 chunks | `15%` |
-| `format_specific` | Forza un formato (lista, tabla, JSON) | `5%` |
+| `extractive` | Literal verbatim span answer present in the chunk | `35%` |
+| `inferential` | Single inference step over facts in the chunk | `25%` |
+| `unanswerable` | Plausible question whose answer is **not** in the document. Used to train grounded refusal. | `20%` |
+| `multi_chunk` | Requires combining info from ≥ 2 chunks | `15%` |
+| `format_specific` | Forces a specific format (list, table, JSON) | `5%` |
 
-La mezcla es configurable en `generation.mix` y `unanswerable` usa visibilidad del documento completo para validar que la respuesta realmente no existe.
+The mix is configurable via `generation.mix`. `unanswerable` items get full-document visibility so the model can verify the answer truly isn't there.
 
 ---
 
-## Referencia de CLI
+## CLI reference
 
-### Comandos principales
+### Top-level commands
 
 ```bash
 uv run synthetic-ds --help
 ```
 
-| Comando | Descripción |
+| Command | Description |
 |---|---|
-| `init` | Crea/upgrade `synthetic-ds.yaml` en `--project-dir`. |
-| `ingest <pdf_dir>` | Solo parsea PDFs y arma chunks. |
-| `split` | Congela `train_doc_ids` / `eval_doc_ids`. |
-| `generate --split <train\|eval>` | Genera ejemplos para un split. |
-| `curate --split <train\|eval>` | Pasa los ejemplos por el judge y filtra. |
-| `export` | Escribe `train.jsonl` / `eval.jsonl` / `review_sample`. |
-| `report` | Renderiza `latest.md` con métricas. |
-| `run <pdf_dir>` | Pipeline end-to-end en foreground. |
-| `submit <pdf_dir>` | Encola un job y arranca un worker desacoplado. |
-| `jobs` | Lista jobs conocidos. |
-| `status [--job-id]` | Estado actual de un job. |
-| `events --job-id` | Journal de eventos del job. |
-| `wait --job-id` | Bloquea hasta `completed` / `failed` / `cancelled`. |
-| `pause / resume / cancel --job-id` | Controles seguros sobre un job. |
-| `doctor` | Diagnóstico de dependencias, OCR, parser y provider key. |
-| `verify --mode <mock-full\|real-smoke>` | Self-check. `mock-full` no consume créditos. |
-| `app` | Lanza la web app local. |
-| `provider list/use/set-key/test` | Gestión de proveedores y claves. |
+| `init` | Create / upgrade `synthetic-ds.yaml` in `--project-dir`. |
+| `ingest <pdf_dir>` | Parse PDFs and build chunks. |
+| `split` | Freeze `train_doc_ids` / `eval_doc_ids`. |
+| `generate --split <train\|eval>` | Generate examples for a split. |
+| `curate --split <train\|eval>` | Run the judge and filter. |
+| `export` | Write `train.jsonl` / `eval.jsonl` / `review_sample`. |
+| `report` | Render `latest.md` with metrics. |
+| `run <pdf_dir>` | End-to-end pipeline in foreground. |
+| `submit <pdf_dir>` | Enqueue a job and spawn a detached worker. |
+| `jobs` | List known jobs. |
+| `status [--job-id]` | Current state of a job. |
+| `events --job-id` | Job event journal. |
+| `wait --job-id` | Block until `completed` / `failed` / `cancelled`. |
+| `pause / resume / cancel --job-id` | Safe job controls. |
+| `doctor` | Dependency, OCR, parser and provider-key health check. |
+| `verify --mode <mock-full\|real-smoke>` | Self-check. `mock-full` burns no credits. |
+| `app` | Launch the local web app. |
+| `provider list/use/set-key/test` | Provider and key management. |
 
-### Flags transversales más útiles
+### Most useful cross-cutting flags
 
-| Flag | Propósito |
+| Flag | Purpose |
 |---|---|
-| `--project-dir <path>` | Directorio del proyecto (default `.`). |
-| `--json` | Salida JSON parseable (todo el CLI lo soporta donde tiene sentido). |
-| `--agent` | Defaults conservadores para ejecución no interactiva. |
-| `--resource-profile <low\|balanced\|throughput>` | Preset de workers `(generation, judge)` = `(2,1)/(4,2)/(6,3)`. |
-| `--generation-workers N` / `--judge-workers N` | Override manual. |
-| `--parser-mode <auto\|fast\|ocr_safe>` | `fast` = solo PyMuPDF, sin OCR ni render de imágenes. |
-| `--max-pdfs N` | Limita la cantidad de PDFs procesados de la carpeta ordenada. |
-| `--max-pages-per-chunk N` | Evita chunks gigantes en libros con poco texto por página. |
-| `--include-file <relative.pdf>` | Selecciona PDFs específicos (repetible). |
-| `--quality-preset <strict\|balanced\|permissive>` | Preset de umbrales del judge. |
-| `--min-overall-score 0.8` | Umbral overall custom (0–1). |
-| `--min-groundedness-score 0.8` | Umbral groundedness custom (0–1). |
-| `--allow-partial-export` | Exporta `train` aunque `eval` aún esté incompleto. |
-| `--resume` | Salta fases que ya tienen checkpoint. |
-| `--from-phase <ingest\|split\|generate_train\|judge_train\|generate_eval\|judge_eval\|export\|report>` | Fuerza re-empezar desde una fase. Acepta alias `generate` / `judge`. |
-| `--only-train` / `--only-eval` | Limita la corrida a un split. |
+| `--project-dir <path>` | Project root (defaults to `.`). |
+| `--json` | Parseable JSON output (supported wherever it makes sense). |
+| `--agent` | Conservative defaults for non-interactive runs. |
+| `--resource-profile <low\|balanced\|throughput>` | Worker preset `(generation, judge)` = `(2,1)/(4,2)/(6,3)`. |
+| `--generation-workers N` / `--judge-workers N` | Manual override. |
+| `--parser-mode <auto\|fast\|ocr_safe>` | `fast` = PyMuPDF only, no OCR, no image rendering. |
+| `--max-pdfs N` | Cap how many PDFs from the (sorted) folder are processed. |
+| `--max-pages-per-chunk N` | Avoid huge chunks on books with thin pages. |
+| `--include-file <relative.pdf>` | Pick specific PDFs (repeatable). |
+| `--quality-preset <strict\|balanced\|permissive>` | Judge threshold preset. |
+| `--min-overall-score 0.8` | Custom overall threshold (0–1). |
+| `--min-groundedness-score 0.8` | Custom groundedness threshold (0–1). |
+| `--allow-partial-export` | Export `train` even if `eval` is incomplete. |
+| `--resume` | Skip phases that already have a checkpoint. |
+| `--from-phase <ingest\|split\|generate_train\|judge_train\|generate_eval\|judge_eval\|export\|report>` | Force re-running from a phase. Accepts `generate` / `judge` aliases. |
+| `--only-train` / `--only-eval` | Restrict the run to a single split. |
 
-### Ejemplo: corrida estricta para fine-tuning
+### Example: strict run for fine-tuning
 
 ```bash
 uv run synthetic-ds run ./pdfs \
@@ -373,13 +373,13 @@ uv run synthetic-ds run ./pdfs \
   --json
 ```
 
-### Ejemplo: reanudar tras un crash
+### Example: resume after a crash
 
 ```bash
 uv run synthetic-ds run ./pdfs --project-dir . --resume --json
 ```
 
-### Ejemplo: reconstruir solo eval
+### Example: rebuild only eval
 
 ```bash
 uv run synthetic-ds run ./pdfs \
@@ -392,9 +392,9 @@ uv run synthetic-ds run ./pdfs \
 
 ---
 
-## Configuración (`synthetic-ds.yaml`)
+## Configuration (`synthetic-ds.yaml`)
 
-`init` crea este archivo con defaults sensatos. Estructura completa:
+`init` creates this file with sensible defaults. Full structure:
 
 ```yaml
 providers:
@@ -414,12 +414,12 @@ parsing:
   fallback_parser: pymupdf
   default_language: es
   enable_ocr: true
-  ocr_text_min_chars: 80           # Umbral para activar OCR por página
+  ocr_text_min_chars: 80           # Per-page threshold to trigger OCR
   render_page_images: true
   page_image_dpi: 144
   multimodal_max_pages_per_chunk: 2
-  docling_max_pages: 100           # Salta a PyMuPDF en libros más grandes
-  docling_max_ram_mb: 3072         # Salta a PyMuPDF si la RAM disponible es menor
+  docling_max_pages: 100           # Fall back to PyMuPDF on larger books
+  docling_max_ram_mb: 3072         # Fall back to PyMuPDF on lower available RAM
   docling_streaming: true
   oom_cooldown_chunks: 5
 
@@ -450,7 +450,7 @@ generation:
 
 filters:
   preset: balanced                 # strict (0.85) | balanced (0.70) | permissive (0.55)
-  groundedness_threshold: null     # Override del preset si != null
+  groundedness_threshold: null     # Override the preset when not null
   overall_threshold: null
 
 review:
@@ -463,9 +463,9 @@ export:
 
 ---
 
-## Proveedores soportados
+## Supported providers
 
-| Proveedor | Modelo default | Variable de entorno | Base URL |
+| Provider | Default model | Env var | Base URL |
 |---|---|---|---|
 | `fireworks` | `accounts/fireworks/routers/kimi-k2p5-turbo` | `FIREWORKS_API_KEY` | `api.fireworks.ai/inference/v1` |
 | `openai` | `gpt-4.1-mini` | `OPENAI_API_KEY` | `api.openai.com/v1` |
@@ -474,65 +474,65 @@ export:
 | `openrouter` | `moonshotai/kimi-k2` | `OPENROUTER_API_KEY` | `openrouter.ai/api/v1` |
 | `xai` | `grok-3-mini` | `XAI_API_KEY` | `api.x.ai/v1` |
 
-Cualquiera de estos modelos puede sobrescribirse en `synthetic-ds.yaml`. El SDK usado es `openai>=1.99` y la pipeline asume **structured outputs** (JSON mode), así que el endpoint debe soportar `response_format` o `tool_choice` con JSON Schema.
+Any of these models can be overridden in `synthetic-ds.yaml`. The SDK is `openai>=1.99` and the pipeline relies on **structured outputs** (JSON mode), so the endpoint must support `response_format` or `tool_choice` with a JSON Schema.
 
 ```bash
 uv run synthetic-ds provider list
 uv run synthetic-ds provider use openai
-uv run synthetic-ds provider test                # ping no destructivo
+uv run synthetic-ds provider test                # non-destructive ping
 ```
 
 ---
 
-## App visual local
+## Local web app
 
 ```bash
-# Una sola vez: build del frontend (React + Vite)
+# One-time: build the frontend (React + Vite)
 cd src/synthetic_ds/web/frontend
 pnpm install && pnpm build
 cd -
 
-# Lanzar la app
+# Launch the app
 uv run synthetic-ds app --project-dir .
-# → abre http://127.0.0.1:8787
+# → opens http://127.0.0.1:8787
 ```
 
-La app permite:
+The app lets you:
 
-- Elegir una carpeta con PDFs vía folder picker nativo.
-- Iniciar/parar corridas y ver progreso en vivo (Server-Sent Events).
-- Revisar corridas anteriores con métricas (distribución de tipos, scores, aceptación).
-- Explorar los Q&A generados con filtros (por tipo, score, doc).
-- Editar `synthetic-ds.yaml` desde un formulario o desde Monaco (YAML crudo).
-- Dark mode por defecto, toggle persistente a light.
+- Pick a PDF folder via a native folder picker.
+- Start / stop runs and watch live progress (Server-Sent Events).
+- Browse past runs with metrics (type distribution, scores, acceptance).
+- Filter generated Q&A by type / score / document.
+- Edit `synthetic-ds.yaml` from a form or directly in Monaco (raw YAML).
+- Dark mode by default with a persistent toggle to light mode.
 
-### Desarrollo del frontend (HMR)
+### Frontend dev (HMR)
 
 ```bash
-# Terminal 1 — backend FastAPI
+# Terminal 1 — FastAPI backend
 uv run synthetic-ds app --project-dir . --open-browser false
 
 # Terminal 2 — Vite dev server
 cd src/synthetic_ds/web/frontend
 pnpm dev
-# → http://127.0.0.1:5173 (proxea /api/* y /open/* al backend en :8787)
+# → http://127.0.0.1:5173 (proxies /api/* and /open/* to the backend on :8787)
 ```
 
 ---
 
-## Modo agente (no interactivo)
+## Agent mode (non-interactive)
 
-`synthetic-ds` está pensado para ser controlado por un agente externo. Recomendado: leer **[AGENTS.md](AGENTS.md)** completo.
+`synthetic-ds` is designed to be driven by an external agent. Recommended reading: **[AGENTS.md](AGENTS.md)**.
 
 ```bash
-# Setup totalmente no interactivo
+# Fully non-interactive setup
 export FIREWORKS_API_KEY=...
 uv run synthetic-ds init --project-dir . --json
 uv run synthetic-ds provider use fireworks --project-dir . --json
 printf '%s\n' "$FIREWORKS_API_KEY" | uv run synthetic-ds provider set-key fireworks --stdin --json
 uv run synthetic-ds doctor --project-dir . --json
 
-# Job asíncrono con corpus estricto
+# Async job with strict corpus
 JOB_ID=$(uv run synthetic-ds submit ./pdfs \
   --project-dir . \
   --parser-mode fast \
@@ -548,42 +548,42 @@ JOB_ID=$(uv run synthetic-ds submit ./pdfs \
 uv run synthetic-ds wait --job-id "$JOB_ID" --timeout-seconds 3600 --json
 ```
 
-`submit` arranca un worker **desacoplado**: el proceso CLI puede salir y `status`/`events`/`wait` siguen funcionando contra el job store persistente.
+`submit` spawns a **detached** worker: the launching CLI process can exit and `status` / `events` / `wait` keep working against the persistent job store.
 
 ---
 
-## Reanudación y checkpoints
+## Resume and checkpoints
 
-Cada fase escribe un checkpoint en:
+Each phase writes a checkpoint to:
 
 ```text
 <pdf_dir>/extraccion_dataset/.work/checkpoints/<phase>.json
 ```
 
-Comportamiento:
+Behavior:
 
-- `--resume`: salta cualquier fase con checkpoint. Útil tras un crash.
-- `--from-phase <phase>`: recomienza desde esa fase, ignorando checkpoints posteriores.
-- Sin flags: corre todas las fases de cero (sobrescribe artefactos).
+- `--resume`: skip any phase that already has a checkpoint. Useful after a crash.
+- `--from-phase <phase>`: re-run from that phase, ignoring later checkpoints.
+- No flags: run every phase from scratch (overwrites artifacts).
 
-Aliases aceptados:
+Accepted aliases:
 
-- `--from-phase generate` → `generate_train` (o `generate_eval` si `--only-eval`).
-- `--from-phase judge` → `judge_train` (o `judge_eval` si `--only-eval`).
+- `--from-phase generate` → `generate_train` (or `generate_eval` with `--only-eval`).
+- `--from-phase judge` → `judge_train` (or `judge_eval` with `--only-eval`).
 
 ---
 
-## Calidad y judging
+## Quality and judging
 
-Cada ejemplo generado es evaluado por un *judge* LLM que devuelve un `JudgeScore`:
+Every generated example is evaluated by an LLM judge that returns a `JudgeScore`:
 
-| Métrica | Descripción |
+| Metric | Description |
 |---|---|
-| `relevance` | Qué tan relevante es la pregunta para el documento. |
-| `groundedness` | Si la respuesta está realmente apoyada por la evidencia. |
-| `format` | Validez del formato pedido. |
-| `difficulty` | Coherencia con la dificultad solicitada. |
-| `overall` | Score final (0–1). |
+| `relevance` | How relevant the question is to the document. |
+| `groundedness` | Whether the answer is actually supported by the evidence. |
+| `format` | Whether the requested format is honored. |
+| `difficulty` | Coherence with the requested difficulty. |
+| `overall` | Final score (0–1). |
 
 ### Presets
 
@@ -593,7 +593,7 @@ Cada ejemplo generado es evaluado por un *judge* LLM que devuelve un `JudgeScore
 | `balanced` *(default)* | `0.70` | `0.70` |
 | `permissive` | `0.55` | `0.55` |
 
-Override puntual:
+One-off override:
 
 ```bash
 uv run synthetic-ds run ./pdfs \
@@ -602,22 +602,22 @@ uv run synthetic-ds run ./pdfs \
   --min-overall-score 0.75
 ```
 
-> ⚠️ `--min-overall-score 0.8` no garantiza que un modelo fine-tuned saque `0.8` en un benchmark externo. Garantiza que el export solo incluya ejemplos que el judge interno puntuó por encima de ese umbral.
+> ⚠️ `--min-overall-score 0.8` does **not** guarantee a fine-tuned model will score `0.8` on an external benchmark. It guarantees that the export only includes examples the internal judge scored above that threshold.
 
 ---
 
-## Contrato de salida
+## Output contract
 
-Todo el output visible queda en:
+All visible output lives under:
 
 ```text
 <pdf_dir>/extraccion_dataset/
-├── train.jsonl              # Chat-format: {"messages":[...], "metadata":{...}}
-├── eval.jsonl               # Idem, split limpio por doc_id (multi-document)
-├── review_sample.jsonl      # Sample para revisión humana (top-N por score)
-├── review_sample.csv        # Idem, formato hoja de cálculo
-├── latest.md                # Reporte con métricas y distribuciones
-└── .work/                   # Estado interno reanudable (no editar)
+├── train.jsonl              # Chat format: {"messages":[...], "metadata":{...}}
+├── eval.jsonl               # Same, clean by doc_id (multi-document mode)
+├── review_sample.jsonl      # Human-review sample (top-N by score)
+├── review_sample.csv        # Same, spreadsheet-friendly
+├── latest.md                # Report with metrics and distributions
+└── .work/                   # Internal resumable state (do not edit)
     ├── documents.jsonl
     ├── chunks.jsonl
     ├── split.json
@@ -626,19 +626,19 @@ Todo el output visible queda en:
     └── checkpoints/
 ```
 
-### Esquema de un registro `train.jsonl`
+### Schema of a `train.jsonl` record
 
 ```json
 {
   "messages": [
     {"role": "system", "content": "..."},
-    {"role": "user", "content": "¿Cuál es la velocidad del sonido en aire seco a 20°C?"},
-    {"role": "assistant", "content": "Aproximadamente 343 m/s."}
+    {"role": "user", "content": "What is the speed of sound in dry air at 20°C?"},
+    {"role": "assistant", "content": "Approximately 343 m/s."}
   ],
   "metadata": {
     "example_id": "ex-...",
-    "source_doc": "fisica_general.pdf",
-    "doc_id": "fisica-general-a1b2c3d4e5",
+    "source_doc": "physics_general.pdf",
+    "doc_id": "physics-general-a1b2c3d4e5",
     "chunk_ids": ["chunk-..."],
     "page_range": [42, 47],
     "question_type": "extractive",
@@ -649,88 +649,88 @@ Todo el output visible queda en:
     "quality_score": 0.91,
     "split": "train",
     "prompt_version": "v1",
-    "language": "es"
+    "language": "en"
   }
 }
 ```
 
 ---
 
-## Seguridad de claves
+## API key security
 
-`provider set-key <provider>` guarda la clave en el **keychain del sistema** vía [`keyring`](https://github.com/jaraco/keyring) cuando hay un backend disponible (Keychain en macOS, libsecret en Linux, Credential Manager en Windows).
+`provider set-key <provider>` stores the key in the **system keychain** via [`keyring`](https://github.com/jaraco/keyring) when a backend is available (Keychain on macOS, libsecret on Linux, Credential Manager on Windows).
 
-Alternativas:
+Alternatives:
 
 ```bash
-# Variable de entorno (preferida en CI / contenedores)
+# Environment variable (preferred in CI / containers)
 export FIREWORKS_API_KEY=fk-...
 
-# Stdin sin interacción (preferida en agentes)
+# Stdin without interaction (preferred in agents)
 printf '%s\n' "$FIREWORKS_API_KEY" | \
   uv run synthetic-ds provider set-key fireworks --stdin
 ```
 
-> El comando `--api-key fk-...` también existe pero **no es recomendado**: la clave queda en el history del shell.
+> The `--api-key fk-...` flag exists but is **discouraged**: the key ends up in your shell history.
 
 ---
 
-## Desarrollo
+## Development
 
 ```bash
-# Setup completo
+# Full setup
 uv sync --extra parse --extra semantic --extra dev
 
 # Tests
 uv run --extra dev pytest
 
-# Tests específicos
+# Specific tests
 uv run --extra dev pytest tests/test_pipeline_session.py -v
 
-# Frontend dev server con HMR
+# Frontend dev server with HMR
 cd src/synthetic_ds/web/frontend
 pnpm dev
 ```
 
-### Verificación end-to-end sin gastar créditos
+### End-to-end verification without burning credits
 
 ```bash
-uv run synthetic-ds verify --mode mock-full     # backend mockeado
-uv run synthetic-ds verify --mode real-smoke    # 1 llamada real al provider
+uv run synthetic-ds verify --mode mock-full     # mocked backend
+uv run synthetic-ds verify --mode real-smoke    # 1 real provider call
 ```
 
 ---
 
-## Estructura del repositorio
+## Repository layout
 
 ```text
 .
 ├── src/synthetic_ds/
-│   ├── cli.py                  # Typer CLI completo (1.1k LOC)
-│   ├── pipeline.py             # PipelineSession (orquestador de fases)
-│   ├── job_runner.py           # Job runner durable (submit/wait/cancel)
-│   ├── ingest.py               # Parsing PDF + OCR + idioma
-│   ├── chunking.py             # Estrategia legacy headings_first
-│   ├── semantic_chunking.py    # Chunking semántico jerárquico (NEW)
-│   ├── generate.py             # Targets, generación de Q&A
-│   ├── curate.py               # Filtrado por umbrales del judge
-│   ├── prompts.py              # Prompts multi-idioma
-│   ├── exporter.py             # Export JSONL + review sample
-│   ├── inference.py            # Backend OpenAI-compatible (sync pool)
+│   ├── cli.py                  # Full Typer CLI (~1.1k LOC)
+│   ├── pipeline.py             # PipelineSession (phase orchestrator)
+│   ├── job_runner.py           # Durable job runner (submit/wait/cancel)
+│   ├── ingest.py               # PDF parsing + OCR + language
+│   ├── chunking.py             # Legacy headings_first strategy
+│   ├── semantic_chunking.py    # Hierarchical semantic chunking (NEW)
+│   ├── generate.py             # Targets and Q&A generation
+│   ├── curate.py               # Threshold-based judge filtering
+│   ├── prompts.py              # Multi-language prompts
+│   ├── exporter.py             # JSONL + review sample export
+│   ├── inference.py            # OpenAI-compatible backend (sync pool)
 │   ├── circuit.py              # Circuit breaker
 │   ├── webapp.py               # FastAPI + SSE
 │   ├── web/frontend/           # React 18 + Vite + Tailwind + shadcn/ui
-│   ├── config.py               # Modelos Pydantic de config
+│   ├── config.py               # Pydantic config models
 │   ├── models.py               # Document/Chunk/Example/Judge/etc.
 │   ├── storage.py              # JSONL + checkpoints + paths
-│   ├── secrets.py              # Wrapper de keyring
-│   ├── splitter.py             # Detección de modo y split por doc_id
+│   ├── secrets.py              # Keyring wrapper
+│   ├── splitter.py             # Mode detection and doc_id split
 │   ├── verify.py               # mock-full / real-smoke
 │   └── ...
-├── tests/                      # 30+ archivos pytest
-├── synthetic-ds.yaml           # Config default
+├── tests/                      # 30+ pytest files
+├── synthetic-ds.yaml           # Default config
 ├── pyproject.toml              # Build + deps + extras
-├── AGENTS.md                   # Runbook para agentes externos
+├── AGENTS.md                   # Runbook for external agents
 └── README.md
 ```
 
@@ -738,16 +738,16 @@ uv run synthetic-ds verify --mode real-smoke    # 1 llamada real al provider
 
 ## Tests
 
-Tests cubren CLI, providers, ingest, chunking, generación, curation, export, jobs, web app, secrets y resume:
+Tests cover CLI, providers, ingest, chunking, generation, curation, export, jobs, web app, secrets, and resume:
 
 ```bash
 uv run --extra dev pytest                       # full suite
-uv run --extra dev pytest -k cli                # solo CLI
-uv run --extra dev pytest -k resume             # solo resume
-uv run --extra dev pytest --tb=short            # tracebacks compactos
+uv run --extra dev pytest -k cli                # CLI only
+uv run --extra dev pytest -k resume             # resume only
+uv run --extra dev pytest --tb=short            # compact tracebacks
 ```
 
-Listado abreviado:
+Abbreviated list:
 
 ```
 test_cli.py                  test_cli_providers.py        test_app_cli.py
@@ -766,27 +766,27 @@ test_web_jobs.py             test_webapp_boot.py          test_webapp_static.py
 
 ## Roadmap
 
-- [ ] Modo *streaming* en la generación para reducir picos de RAM.
-- [ ] Adapter de Claude API nativo (además del modo OpenAI-compatible).
-- [ ] Soporte oficial de batch APIs (OpenAI Batch, Anthropic Message Batches).
-- [ ] Embeddings opcionales para deduplicación cruzada de Q&A.
-- [ ] Dataset Cards auto-generadas (Hugging Face style).
-- [ ] Plugin de export para LoRA/QLoRA frameworks (axolotl, unsloth).
+- [ ] Streaming generation mode to flatten RAM peaks.
+- [ ] Native Claude API adapter (in addition to OpenAI-compatible mode).
+- [ ] First-class batch APIs (OpenAI Batch, Anthropic Message Batches).
+- [ ] Optional embeddings for cross-Q&A deduplication.
+- [ ] Auto-generated Dataset Cards (Hugging Face style).
+- [ ] Export plugins for LoRA/QLoRA frameworks (axolotl, unsloth).
 
-¿Sugerencias? Abrí un issue.
+Got ideas? Open an issue.
 
 ---
 
-## Licencia
+## License
 
-Pendiente. Hasta que se publique un archivo `LICENSE`, asumí que el código es **propietario / todos los derechos reservados** y pedí permiso al autor antes de redistribuir.
+Pending. Until a `LICENSE` file is published, treat this code as **proprietary / all rights reserved** and ask the author before redistributing.
 
 ---
 
 <div align="center">
 
-**[⬆ volver al inicio](#synthetic-ds)**
+**[⬆ back to top](#synthetic-ds)**
 
-Hecho con `uv` + `typer` + `fastapi` + `react`.
+Built with `uv` + `typer` + `fastapi` + `react`.
 
 </div>
